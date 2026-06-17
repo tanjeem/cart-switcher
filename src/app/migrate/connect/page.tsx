@@ -10,7 +10,8 @@ function ConnectForm() {
 
   const [step, setStep] = useState<'woocommerce' | 'shopify'>('woocommerce')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const errorParam = searchParams.get('error')
+  const [error, setError] = useState(errorParam ? `OAuth error: ${errorParam}` : '')
 
   const [wc, setWc] = useState({ url: '', consumerKey: '', consumerSecret: '' })
   const [shopDomain, setShopDomain] = useState('')

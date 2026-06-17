@@ -28,6 +28,7 @@ export async function POST(req: Request) {
   cookieStore.set('shopify_oauth', JSON.stringify({ state, wcUrl, wcKey, wcSecret, isDemo }), {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
     maxAge: 600, // 10 minutes
     path: '/',
   })
