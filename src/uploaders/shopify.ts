@@ -21,7 +21,7 @@ export class ShopifyUploader {
       timeout: 30000,
     })
 
-    // Retry on 429 rate limit responses
+    // Retry on 429, throw readable error on others
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.client.interceptors.response.use(undefined, async (error: any) => {
       if (error.response?.status === 429) {
@@ -29,7 +29,13 @@ export class ShopifyUploader {
         await sleep(retryAfter * 1000)
         return this.client.request(error.config)
       }
-      throw error
+      // Surface Shopify's actual error body
+      const body = error.response?.data
+      const shopifyMsg = body?.errors
+        ? (typeof body.errors === 'string' ? body.errors : JSON.stringify(body.errors))
+        : body?.error ?? error.message
+      const status = error.response?.status ?? 'unknown'
+      throw new Error(`Shopify ${status}: ${shopifyMsg}`)
     })
   }
 

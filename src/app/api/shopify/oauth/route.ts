@@ -33,11 +33,14 @@ export async function POST(req: Request) {
     path: '/',
   })
 
+  // grant_options[]=per-user forces the permissions screen even if the app
+  // was previously installed, ensuring we always get a fresh token with all scopes
   const authUrl = `https://${shopDomain}/admin/oauth/authorize?` + new URLSearchParams({
     client_id: process.env.SHOPIFY_CLIENT_ID!,
     scope: SCOPES,
     redirect_uri: redirectUri,
     state,
+    'grant_options[]': 'per-user',
   })
 
   return NextResponse.json({ authUrl })
