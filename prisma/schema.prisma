@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  clerkId   String   @unique
+  email     String   @unique
+  createdAt DateTime @default(now())
+  jobs      MigrationJob[]
+}
+
+model MigrationJob {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  // Source (WooCommerce)
+  wcUrl        String
+  wcKey        String
+  wcSecret     String
+
+  // Target (Shopify)
+  shopifyDomain      String
+  shopifyAccessToken String
+
+  status    JobStatus @default(PENDING)
+  isDemo    Boolean   @default(false)
+
+  // Entity counts (totals discovered)
+  totalProducts  Int @default(0)
+  totalOrders    Int @default(0)
+  totalCustomers Int @default(0)
+  totalCoupons   Int @default(0)
+  totalPosts     Int @default(0)
+
+  // Entity counts (completed)
+  doneProducts  Int @default(0)
+  doneOrders    Int @default(0)
+  doneCustomers Int @default(0)
+  doneCoupons   Int @default(0)
+  donePosts     Int @default(0)
+
+  // Failed counts
+  failedProducts  Int @default(0)
+  failedOrders    Int @default(0)
+  failedCustomers Int @default(0)
+
+  errorLog  String?
+  inngestId String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  logs MigrationLog[]
+}
+
+model MigrationLog {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       MigrationJob @relation(fields: [jobId], references: [id])
+  entity    String
+  entityId  String
+  status    String
+  message   String?
+  createdAt DateTime @default(now())
+
+  @@index([jobId])
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+  PARTIAL
+}

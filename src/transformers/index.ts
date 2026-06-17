@@ -1,0 +1,180 @@
+import type {
+  NormalizedProduct,
+  NormalizedCustomer,
+  NormalizedOrder,
+  NormalizedCoupon,
+  NormalizedPost,
+} from '@/types'
+
+export function transformProduct(p: NormalizedProduct) {
+  return {
+    title: p.title,
+    body_html: p.description,
+    vendor: p.vendor || 'Default',
+    product_type: p.productType,
+    tags: [...p.tags, ...p.categories].join(', '),
+    status: p.status,
+    metafields_global_title_tag: p.seoTitle,
+    metafields_global_description_tag: p.seoDescription,
+    variants: p.variants.map(v => ({
+      sku: v.sku,
+      price: v.price,
+      compare_at_price: v.compareAtPrice ?? null,
+      weight: v.weight ?? 0,
+      weight_unit: v.weightUnit ?? 'kg',
+      inventory_quantity: v.inventory,
+      inventory_management: 'shopify',
+      requires_shipping: v.requiresShipping,
+      taxable: v.taxable,
+      option1: v.option1 ?? null,
+      option2: v.option2 ?? null,
+      option3: v.option3 ?? null,
+    })),
+    images: p.images.map(img => ({
+      src: img.src,
+      alt: img.alt ?? '',
+      position: img.position,
+    })),
+    options: buildOptions(p),
+  }
+}
+
+function buildOptions(p: NormalizedProduct) {
+  if (p.variants.length <= 1 && !p.variants[0]?.option1) {
+    return [{ name: 'Title', values: ['Default Title'] }]
+  }
+
+  const opt1Values = [...new Set(p.variants.map(v => v.option1).filter(Boolean))]
+  const opt2Values = [...new Set(p.variants.map(v => v.option2).filter(Boolean))]
+  const opt3Values = [...new Set(p.variants.map(v => v.option3).filter(Boolean))]
+
+  const options = []
+  if (opt1Values.length) options.push({ name: 'Option 1', values: opt1Values })
+  if (opt2Values.length) options.push({ name: 'Option 2', values: opt2Values })
+  if (opt3Values.length) options.push({ name: 'Option 3', values: opt3Values })
+  return options
+}
+
+export function transformCustomer(c: NormalizedCustomer) {
+  return {
+    first_name: c.firstName,
+    last_name: c.lastName,
+    email: c.email,
+    phone: c.phone ?? null,
+    accepts_marketing: c.acceptsMarketing,
+    note: c.note ?? null,
+    addresses: c.addresses.map(a => ({
+      first_name: a.firstName,
+      last_name: a.lastName,
+      address1: a.address1,
+      address2: a.address2 ?? '',
+      city: a.city,
+      province: a.province ?? '',
+      zip: a.zip,
+      country: a.country,
+      phone: a.phone ?? null,
+      default: a.isDefault ?? false,
+    })),
+  }
+}
+
+export function transformOrder(o: NormalizedOrder) {
+  return {
+    email: o.email,
+    phone: o.phone ?? null,
+    note: o.note ?? null,
+    financial_status: o.financialStatus,
+    fulfillment_status: o.fulfillmentStatus,
+    currency: o.currency,
+    processed_at: o.processedAt,
+    created_at: o.createdAt,
+    tags: o.tags.join(', '),
+    line_items: o.lineItems.map(li => ({
+      title: li.title,
+      variant_title: li.variantTitle ?? null,
+      sku: li.sku ?? null,
+      quantity: li.quantity,
+      price: li.price,
+      total_discount: li.totalDiscount,
+      taxable: li.taxable,
+      requires_shipping: true,
+    })),
+    shipping_address: o.shippingAddress ? {
+      first_name: o.shippingAddress.firstName,
+      last_name: o.shippingAddress.lastName,
+      address1: o.shippingAddress.address1,
+      address2: o.shippingAddress.address2 ?? '',
+      city: o.shippingAddress.city,
+      province: o.shippingAddress.province ?? '',
+      zip: o.shippingAddress.zip,
+      country: o.shippingAddress.country,
+      phone: o.shippingAddress.phone ?? null,
+    } : null,
+    billing_address: o.billingAddress ? {
+      first_name: o.billingAddress.firstName,
+      last_name: o.billingAddress.lastName,
+      address1: o.billingAddress.address1,
+      address2: o.billingAddress.address2 ?? '',
+      city: o.billingAddress.city,
+      province: o.billingAddress.province ?? '',
+      zip: o.billingAddress.zip,
+      country: o.billingAddress.country,
+      phone: o.billingAddress.phone ?? null,
+    } : null,
+    discount_codes: o.discountCodes.map(code => ({
+      code,
+      amount: '0',
+      type: 'fixed_amount',
+    })),
+    // Historical orders don't send confirmation emails
+    send_receipt: false,
+    send_fulfillment_receipt: false,
+    inventory_behaviour: 'bypass',
+  }
+}
+
+export function transformCoupon(c: NormalizedCoupon) {
+  const valueType = c.type === 'percentage' ? 'percentage' : 'fixed_amount'
+
+  return {
+    code: c.code.toUpperCase(),
+    priceRule: {
+      title: c.code.toUpperCase(),
+      target_type: 'line_item',
+      target_selection: 'all',
+      allocation_method: 'across',
+      value_type: valueType,
+      value: c.type === 'percentage' ? `-${c.value}` : `-${c.value}`,
+      customer_selection: 'all',
+      starts_at: new Date().toISOString(),
+      ends_at: c.expiresAt ?? null,
+      usage_limit: c.usageLimit ?? null,
+      minimum_subtotal_amount: c.minimumOrderAmount ?? '0.00',
+    },
+  }
+}
+
+export function transformPost(p: NormalizedPost) {
+  return {
+    title: p.title,
+    body_html: p.content,
+    summary_html: p.excerpt ?? '',
+    handle: p.slug,
+    published: p.status === 'published',
+    published_at: p.publishedAt ?? new Date().toISOString(),
+    metafields: [
+      p.seoTitle && {
+        key: 'title_tag',
+        value: p.seoTitle,
+        type: 'single_line_text_field',
+        namespace: 'global',
+      },
+      p.seoDescription && {
+        key: 'description_tag',
+        value: p.seoDescription,
+        type: 'single_line_text_field',
+        namespace: 'global',
+      },
+    ].filter(Boolean),
+  }
+}

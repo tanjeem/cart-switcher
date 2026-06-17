@@ -1,0 +1,104 @@
+import axios, { AxiosInstance } from 'axios'
+import type { ShopifyCredentials } from '@/types'
+
+const SHOPIFY_API_VERSION = '2024-01'
+
+// Shopify REST Admin API: 2 requests/second leaky bucket (40 burst)
+// We sleep 600ms between writes to stay safely under the limit
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+export class ShopifyUploader {
+  private client: AxiosInstance
+
+  constructor(private creds: ShopifyCredentials) {
+    const domain = creds.domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
+    this.client = axios.create({
+      baseURL: `https://${domain}/admin/api/${SHOPIFY_API_VERSION}`,
+      headers: {
+        'X-Shopify-Access-Token': creds.accessToken,
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    })
+
+    // Retry on 429 rate limit responses
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.client.interceptors.response.use(undefined, async (error: any) => {
+      if (error.response?.status === 429) {
+        const retryAfter = parseInt(error.response.headers['retry-after'] ?? '2', 10)
+        await sleep(retryAfter * 1000)
+        return this.client.request(error.config)
+      }
+      throw error
+    })
+  }
+
+  async validate(): Promise<boolean> {
+    try {
+      await this.client.get('/shop.json')
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async createProduct(payload: any): Promise<void> {
+    await this.client.post('/products.json', { product: payload })
+    await sleep(600)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async createCustomer(payload: any): Promise<void> {
+    await this.client.post('/customers.json', { customer: payload })
+    await sleep(600)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async createOrder(payload: any): Promise<void> {
+    await this.client.post('/orders.json', { order: payload })
+    await sleep(600)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async createDiscountCode(payload: any): Promise<void> {
+    // Create a price rule first, then attach the discount code
+    const priceRuleRes = await this.client.post('/price_rules.json', {
+      price_rule: payload.priceRule,
+    })
+    const priceRuleId = priceRuleRes.data.price_rule.id
+    await sleep(600)
+
+    await this.client.post(`/price_rules/${priceRuleId}/discount_codes.json`, {
+      discount_code: { code: payload.code },
+    })
+    await sleep(600)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async createArticle(payload: any): Promise<void> {
+    // Ensure blog exists
+    const blogId = await this.getOrCreateBlog('News')
+    await this.client.post(`/blogs/${blogId}/articles.json`, { article: payload })
+    await sleep(600)
+  }
+
+  private blogIdCache: number | null = null
+
+  private async getOrCreateBlog(title: string): Promise<number> {
+    if (this.blogIdCache) return this.blogIdCache
+
+    const res = await this.client.get('/blogs.json')
+    const blogs: { id: number; title: string }[] = res.data.blogs
+
+    const existing = blogs.find(b => b.title === title)
+    if (existing) {
+      this.blogIdCache = existing.id
+      return existing.id
+    }
+
+    const created = await this.client.post('/blogs.json', { blog: { title } })
+    this.blogIdCache = created.data.blog.id
+    return this.blogIdCache!
+  }
+}
