@@ -1,12 +1,9 @@
-import { auth } from '@clerk/nextjs/server'
 import { db } from '@/lib/db'
 
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
-  const { userId } = await auth()
-  if (!userId) return new Response('Unauthorized', { status: 401 })
 
   const { jobId } = await params
 
