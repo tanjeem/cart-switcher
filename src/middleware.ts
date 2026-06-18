@@ -8,6 +8,7 @@ const isPublicRoute = createRouteMatcher([
   '/migrate/progress(.*)',
   '/api/connections(.*)',
   '/api/jobs(.*)',
+  '/api/jobs/start(.*)',
   '/api/progress(.*)',
   '/api/shopify(.*)',
   '/api/inngest(.*)',

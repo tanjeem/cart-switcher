@@ -1,20 +1,18 @@
 'use client'
 
 import { useState, Suspense } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 
 function ConnectForm() {
-  const router = useRouter()
   const searchParams = useSearchParams()
   const isDemo = searchParams.get('demo') === 'true'
 
   const [step, setStep] = useState<'woocommerce' | 'shopify'>('woocommerce')
   const [loading, setLoading] = useState(false)
-  const errorParam = searchParams.get('error')
-  const [error, setError] = useState(errorParam ? `OAuth error: ${errorParam}` : '')
+  const [error, setError] = useState('')
 
   const [wc, setWc] = useState({ url: '', consumerKey: '', consumerSecret: '' })
-  const [shopDomain, setShopDomain] = useState('')
+  const [shopify, setShopify] = useState({ domain: '', accessToken: '' })
   const [counts, setCounts] = useState<Record<string, number> | null>(null)
 
   async function validateWC() {
@@ -37,27 +35,27 @@ function ConnectForm() {
     }
   }
 
-  async function connectShopify() {
+  async function startMigration() {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch('/api/shopify/oauth', {
+      const res = await fetch('/api/jobs/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          shop: shopDomain,
           wcUrl: wc.url,
           wcKey: wc.consumerKey,
           wcSecret: wc.consumerSecret,
+          shopifyDomain: shopify.domain,
+          shopifyAccessToken: shopify.accessToken,
           isDemo,
         }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      // Redirect to Shopify OAuth page
-      window.location.href = data.authUrl
+      window.location.href = `/migrate/progress/${data.jobId}`
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to connect Shopify')
+      setError(e instanceof Error ? e.message : 'Failed to start migration')
       setLoading(false)
     }
   }
@@ -90,7 +88,7 @@ function ConnectForm() {
               <h2 className="font-semibold text-lg">WooCommerce store</h2>
               <Field
                 label="Store URL"
-                placeholder="shingaraproduction.com or https://shingaraproduction.com"
+                placeholder="shingaraproduction.com"
                 value={wc.url}
                 onChange={v => setWc(p => ({ ...p, url: v }))}
               />
@@ -124,7 +122,7 @@ function ConnectForm() {
           {step === 'shopify' && (
             <div className="space-y-4">
               {counts && (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-2">
                   <p className="text-sm font-medium text-green-800 mb-2">WooCommerce connected</p>
                   <div className="grid grid-cols-3 gap-2 text-xs text-green-700">
                     <CountBadge label="Products" count={counts.products} />
@@ -135,23 +133,43 @@ function ConnectForm() {
                   </div>
                 </div>
               )}
+
               <h2 className="font-semibold text-lg">Shopify store</h2>
+
+              {/* Instructions */}
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 space-y-1">
+                <p className="font-semibold">How to get your API token (2 min):</p>
+                <ol className="list-decimal list-inside space-y-0.5">
+                  <li>In Shopify admin → <strong>Settings → Apps and sales channels</strong></li>
+                  <li>Click <strong>Develop apps</strong> → <strong>Create an app</strong></li>
+                  <li>Name it <em>CartSwitcher</em> → click <strong>Configure Admin API scopes</strong></li>
+                  <li>Enable: <strong>Products, Customers, Orders, Price rules, Discounts, Content</strong> (all read & write)</li>
+                  <li>Click <strong>Save</strong> → <strong>Install app</strong> → <strong>Reveal token once</strong></li>
+                  <li>Copy the token below</li>
+                </ol>
+              </div>
+
               <Field
                 label="Store domain"
                 placeholder="mystore.myshopify.com"
-                value={shopDomain}
-                onChange={setShopDomain}
+                value={shopify.domain}
+                onChange={v => setShopify(p => ({ ...p, domain: v }))}
               />
-              <p className="text-xs text-gray-400">
-                You will be redirected to Shopify to approve the connection — no manual API key needed.
-              </p>
+              <Field
+                label="Admin API access token"
+                placeholder="shpat_xxxxxxxxxxxxxxxx"
+                value={shopify.accessToken}
+                onChange={v => setShopify(p => ({ ...p, accessToken: v }))}
+                type="password"
+              />
+
               {error && <p className="text-red-500 text-sm">{error}</p>}
               <button
-                onClick={connectShopify}
-                disabled={loading || !shopDomain}
+                onClick={startMigration}
+                disabled={loading || !shopify.domain || !shopify.accessToken}
                 className="w-full bg-[#96bf48] text-white py-2.5 rounded-lg font-medium disabled:opacity-50 hover:bg-[#7da33a] transition-colors"
               >
-                {loading ? 'Redirecting to Shopify...' : 'Connect with Shopify →'}
+                {loading ? 'Starting migration...' : 'Start migration →'}
               </button>
             </div>
           )}

@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from 'axios'
 import type { ShopifyCredentials } from '@/types'
 
-const SHOPIFY_API_VERSION = '2024-01'
+const SHOPIFY_API_VERSION = '2024-10'
 
 // Shopify REST Admin API: 2 requests/second leaky bucket (40 burst)
 // We sleep 600ms between writes to stay safely under the limit
