@@ -80,7 +80,22 @@ export class WooCommerceFetcher {
 
   async getAllProducts(limit?: number): Promise<NormalizedProduct[]> {
     const raw = await this.paginate('/products', limit)
-    return raw.map(this.normalizeProduct)
+    // Fetch full variation data for variable products
+    const withVariations = await Promise.all(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (raw as any[]).map(async (p: any) => {
+        if (p.type === 'variable' && p.variations?.length > 0) {
+          try {
+            const res = await this.client.get(`/products/${p.id}/variations`, { params: { per_page: 100 } })
+            return { ...p, _variationDetails: res.data }
+          } catch {
+            return p
+          }
+        }
+        return p
+      })
+    )
+    return withVariations.map(this.normalizeProduct)
   }
 
   async getAllCustomers(limit?: number): Promise<NormalizedCustomer[]> {
@@ -164,7 +179,7 @@ export class WooCommerceFetcher {
         position: i + 1,
       })),
       variants: p.type === 'variable'
-        ? (p.variations ?? []).map((v: {
+        ? (p._variationDetails ?? []).map((v: {
             id: number; sku: string; regular_price: string; sale_price: string;
             weight: string; stock_quantity: number;
             attributes: { name: string; option: string }[]
@@ -173,9 +188,9 @@ export class WooCommerceFetcher {
             price: v.sale_price || v.regular_price || '0',
             compareAtPrice: v.sale_price ? v.regular_price : undefined,
             weight: parseFloat(v.weight) || undefined,
-            weightUnit: 'KILOGRAMS',
+            weightUnit: 'kg',
             inventory: v.stock_quantity ?? 0,
-            option1: v.attributes?.[0]?.option,
+            option1: v.attributes?.[0]?.option ?? 'Default',
             option2: v.attributes?.[1]?.option,
             option3: v.attributes?.[2]?.option,
             requiresShipping: true,
@@ -186,8 +201,9 @@ export class WooCommerceFetcher {
             price: p.sale_price || p.regular_price || '0',
             compareAtPrice: p.sale_price ? p.regular_price : undefined,
             weight: parseFloat(p.weight) || undefined,
-            weightUnit: 'KILOGRAMS',
+            weightUnit: 'kg',
             inventory: p.stock_quantity ?? 0,
+            option1: 'Default Title',
             requiresShipping: true,
             taxable: true,
           }],
@@ -207,27 +223,27 @@ export class WooCommerceFetcher {
       totalSpent: c.total_spent,
       ordersCount: c.orders_count,
       addresses: [
-        c.billing && {
-          firstName: c.billing.first_name,
-          lastName: c.billing.last_name,
+        c.billing?.address_1?.trim() && {
+          firstName: c.billing.first_name || '',
+          lastName: c.billing.last_name || '',
           address1: c.billing.address_1,
-          address2: c.billing.address_2,
-          city: c.billing.city,
-          province: c.billing.state,
-          zip: c.billing.postcode,
-          country: c.billing.country,
-          phone: c.billing.phone,
+          address2: c.billing.address_2 || '',
+          city: c.billing.city || '',
+          province: c.billing.state || '',
+          zip: c.billing.postcode || '',
+          country: c.billing.country || 'US',
+          phone: c.billing.phone || undefined,
           isDefault: true,
         },
-        c.shipping?.address_1 && {
-          firstName: c.shipping.first_name,
-          lastName: c.shipping.last_name,
+        c.shipping?.address_1?.trim() && {
+          firstName: c.shipping.first_name || '',
+          lastName: c.shipping.last_name || '',
           address1: c.shipping.address_1,
-          address2: c.shipping.address_2,
-          city: c.shipping.city,
-          province: c.shipping.state,
-          zip: c.shipping.postcode,
-          country: c.shipping.country,
+          address2: c.shipping.address_2 || '',
+          city: c.shipping.city || '',
+          province: c.shipping.state || '',
+          zip: c.shipping.postcode || '',
+          country: c.shipping.country || 'US',
           isDefault: false,
         },
       ].filter(Boolean) as NormalizedCustomer['addresses'],

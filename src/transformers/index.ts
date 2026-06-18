@@ -26,9 +26,10 @@ export function transformProduct(p: NormalizedProduct) {
       inventory_management: 'shopify',
       requires_shipping: v.requiresShipping,
       taxable: v.taxable,
-      option1: v.option1 ?? null,
-      option2: v.option2 ?? null,
-      option3: v.option3 ?? null,
+      // option1 must always be set — Shopify rejects null when options are defined
+      option1: v.option1 ?? 'Default Title',
+      ...(v.option2 ? { option2: v.option2 } : {}),
+      ...(v.option3 ? { option3: v.option3 } : {}),
     })),
     images: p.images.map(img => ({
       src: img.src,
@@ -88,7 +89,7 @@ export function transformOrder(o: NormalizedOrder) {
     currency: o.currency,
     processed_at: o.processedAt,
     created_at: o.createdAt,
-    tags: o.tags.join(', '),
+    ...(o.tags?.length ? { tags: o.tags.join(', ') } : {}),
     line_items: o.lineItems.map(li => ({
       title: li.title,
       variant_title: li.variantTitle ?? null,
