@@ -56,7 +56,21 @@ export class ShopifyUploader {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createCustomer(payload: any): Promise<void> {
-    await this.client.post('/customers.json', { customer: payload })
+    try {
+      await this.client.post('/customers.json', { customer: payload })
+    } catch (err: any) {
+      // If email already taken, find and update the existing customer
+      const emailTaken = err.message?.includes('already been taken') || err.response?.data?.errors?.email
+      if (emailTaken && payload.email) {
+        const search = await this.client.get('/customers/search.json', { params: { query: `email:${payload.email}`, limit: 1 } })
+        const existing = search.data.customers?.[0]
+        if (existing) {
+          await this.client.put(`/customers/${existing.id}.json`, { customer: payload })
+        }
+      } else {
+        throw err
+      }
+    }
     await sleep(600)
   }
 

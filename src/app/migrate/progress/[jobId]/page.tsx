@@ -90,26 +90,36 @@ export default function ProgressPage() {
           <div className="mt-6 bg-green-50 border border-green-200 rounded-xl p-5 text-center">
             <div className="text-2xl mb-2">🎉</div>
             <p className="font-semibold text-green-800 mb-1">Migration complete!</p>
-            <p className="text-sm text-green-700">
+            <p className="text-sm text-green-700 mb-4">
               Your store data has been migrated to Shopify.
-              {progress?.status === 'PARTIAL' && ' Some items failed — check the error log in your dashboard.'}
+              {progress?.status === 'PARTIAL' && ' Some items failed — retry below or check your dashboard.'}
             </p>
-            <a
-              href="/dashboard"
-              className="inline-block mt-4 bg-black text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
-            >
-              View dashboard
-            </a>
+            <div className="flex gap-3 justify-center flex-wrap">
+              <a
+                href="/dashboard"
+                className="inline-block bg-black text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
+              >
+                View dashboard
+              </a>
+              {progress?.status === 'PARTIAL' && (
+                <a
+                  href="/migrate/connect"
+                  className="inline-block bg-white border border-gray-300 text-gray-700 px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  Retry migration
+                </a>
+              )}
+            </div>
           </div>
         )}
 
         {isFailed && (
           <div className="mt-6 bg-red-50 border border-red-200 rounded-xl p-5 text-center">
             <p className="font-semibold text-red-800 mb-1">Migration failed</p>
-            <p className="text-sm text-red-600">Check your credentials and try again.</p>
+            <p className="text-sm text-red-600 mb-4">Check your credentials and try again.</p>
             <a
               href="/migrate/connect"
-              className="inline-block mt-4 bg-black text-white px-5 py-2 rounded-lg text-sm font-medium"
+              className="inline-block bg-black text-white px-5 py-2 rounded-lg text-sm font-medium"
             >
               Try again
             </a>

@@ -79,10 +79,17 @@ export function transformCustomer(c: NormalizedCustomer) {
   }
 }
 
+function sanitizePhone(phone?: string): string | null {
+  if (!phone) return null
+  const digits = phone.replace(/\D/g, '')
+  if (digits.length < 7) return null
+  return `+${digits}`
+}
+
 export function transformOrder(o: NormalizedOrder) {
   return {
     email: o.email,
-    phone: o.phone ?? null,
+    phone: sanitizePhone(o.phone),
     note: o.note ?? null,
     financial_status: o.financialStatus,
     fulfillment_status: o.fulfillmentStatus,
@@ -145,7 +152,7 @@ export function transformCoupon(c: NormalizedCoupon) {
       target_selection: 'all',
       allocation_method: 'across',
       value_type: valueType,
-      value: c.type === 'percentage' ? `-${c.value}` : `-${c.value}`,
+      value: `-${c.value}`,
       customer_selection: 'all',
       starts_at: new Date().toISOString(),
       ends_at: c.expiresAt ?? null,
