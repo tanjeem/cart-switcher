@@ -236,10 +236,13 @@ export class WooCommerceFetcher {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private normalizeCustomer(c: any): NormalizedCustomer {
+    // Fall back to billing name when the WC account itself has no name set
+    const firstName = c.first_name || c.billing?.first_name || ''
+    const lastName = c.last_name || c.billing?.last_name || ''
     return {
       sourceId: String(c.id),
-      firstName: c.first_name,
-      lastName: c.last_name,
+      firstName,
+      lastName,
       email: c.email,
       phone: c.billing?.phone,
       acceptsMarketing: false,

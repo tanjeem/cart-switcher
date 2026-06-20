@@ -206,30 +206,67 @@ export class ShopifyUploader {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createCustomer(payload: any): Promise<void> {
-    try {
-      await this.client.post('/customers.json', { customer: payload })
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      const emailTaken = msg.includes('already been taken')
-      if (emailTaken && payload.email) {
-        const search = await this.client.get('/customers/search.json', {
-          params: { query: `email:${payload.email}`, limit: 1 },
-        })
-        const existing = search.data.customers?.[0]
-        if (existing) {
-          await this.client.put(`/customers/${existing.id}.json`, { customer: payload })
+    const tryCreate = async (data: any) => {
+      try {
+        await this.client.post('/customers.json', { customer: data })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        const emailTaken = msg.includes('already been taken') && !msg.includes('phone')
+        const phoneTaken = msg.includes('phone') && msg.includes('already been taken')
+        const phoneInvalid = msg.includes('phone') && msg.includes('is invalid')
+
+        if (phoneTaken || phoneInvalid) {
+          // Retry without phone — a different customer already has this number
+          const { phone: _phone, ...rest } = data
+          void _phone // suppress unused var warning
+          await this.client.post('/customers.json', { customer: rest })
+        } else if (emailTaken && data.email) {
+          const search = await this.client.get('/customers/search.json', {
+            params: { query: `email:${data.email}`, limit: 1 },
+          })
+          const existing = search.data.customers?.[0]
+          if (existing) {
+            try {
+              await this.client.put(`/customers/${existing.id}.json`, { customer: data })
+            } catch (putErr: unknown) {
+              const putMsg = putErr instanceof Error ? putErr.message : String(putErr)
+              if (putMsg.includes('phone') && (putMsg.includes('already been taken') || putMsg.includes('is invalid'))) {
+                const { phone: _phone, ...rest } = data
+                void _phone
+                await this.client.put(`/customers/${existing.id}.json`, { customer: rest })
+              } else {
+                throw putErr
+              }
+            }
+          }
+        } else {
+          throw err
         }
-      } else {
-        throw err
       }
     }
-    await sleep(500)
+
+    await tryCreate(payload)
+    await sleep(300)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createOrder(payload: any): Promise<void> {
-    await this.client.post('/orders.json', { order: payload })
-    await sleep(500)
+    try {
+      await this.client.post('/orders.json', { order: payload })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // If phone is invalid, retry without it
+      if (msg.includes('phone') && (msg.includes('is invalid') || msg.includes('already been taken'))) {
+        const cleanedBilling = payload.billing_address ? { ...payload.billing_address, phone: null } : payload.billing_address
+        const cleanedShipping = payload.shipping_address ? { ...payload.shipping_address, phone: null } : payload.shipping_address
+        await this.client.post('/orders.json', {
+          order: { ...payload, phone: null, billing_address: cleanedBilling, shipping_address: cleanedShipping },
+        })
+      } else {
+        throw err
+      }
+    }
+    await sleep(300)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

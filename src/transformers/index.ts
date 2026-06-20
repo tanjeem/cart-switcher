@@ -63,7 +63,8 @@ export function transformCustomer(c: NormalizedCustomer) {
     first_name: c.firstName,
     last_name: c.lastName,
     email: c.email,
-    phone: c.phone ?? null,
+    // Sanitize phone — Shopify rejects invalid numbers with a 422
+    phone: sanitizePhone(c.phone),
     accepts_marketing: c.acceptsMarketing,
     note: c.note ?? null,
     addresses: c.addresses.map(a => ({
@@ -75,7 +76,8 @@ export function transformCustomer(c: NormalizedCustomer) {
       province: a.province ?? '',
       zip: a.zip,
       country: a.country,
-      phone: a.phone ?? null,
+      // Sanitize address phone too
+      phone: sanitizePhone(a.phone),
       default: a.isDefault ?? false,
     })),
   }
@@ -100,8 +102,12 @@ export function transformOrder(o: NormalizedOrder) {
   return {
     email: o.email,
     phone: sanitizePhone(o.phone),
-    // Links order to existing Shopify customer so their name appears on the order
-    customer: { email: o.email },
+    // Include name from billing so the order shows a name, not just the email
+    customer: {
+      email: o.email,
+      first_name: o.billingAddress?.firstName ?? o.shippingAddress?.firstName ?? '',
+      last_name: o.billingAddress?.lastName ?? o.shippingAddress?.lastName ?? '',
+    },
     note: o.note ?? null,
     financial_status: o.financialStatus,
     fulfillment_status: o.fulfillmentStatus,
