@@ -60,9 +60,33 @@ export class WooCommerceFetcher {
     return { products, orders, customers, coupons, posts }
   }
 
-  private async getCount(endpoint: string): Promise<number> {
+  async getCount(endpoint: string): Promise<number> {
     const res = await this.client.head(endpoint, { params: { per_page: 1 } })
     return parseInt(res.headers['x-wp-total'] ?? '0', 10)
+  }
+
+  // Fetch a specific range of pages — used to split large datasets across multiple Inngest steps
+  async fetchPageRange(endpoint: string, startPage: number, pageCount: number): Promise<unknown[]> {
+    const results: unknown[] = []
+    for (let page = startPage; page < startPage + pageCount; page++) {
+      const res = await this.client.get(endpoint, { params: { per_page: PAGE_SIZE, page } })
+      const items: unknown[] = res.data
+      results.push(...items)
+      if (items.length < PAGE_SIZE) break
+    }
+    return results
+  }
+
+  async getOrdersInRange(startPage: number, pageCount: number): Promise<NormalizedOrder[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = await this.fetchPageRange('/orders', startPage, pageCount)
+    return raw.map(o => this.normalizeOrder(o as any))
+  }
+
+  async getCustomersInRange(startPage: number, pageCount: number): Promise<NormalizedCustomer[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = await this.fetchPageRange('/customers', startPage, pageCount)
+    return raw.map(c => this.normalizeCustomer(c as any))
   }
 
   private async getPostCount(): Promise<number> {

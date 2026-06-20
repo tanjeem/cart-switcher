@@ -5,9 +5,11 @@ import { ShopifyUploader } from '@/uploaders/shopify'
 import { transformProduct, transformCustomer, transformOrder, transformCoupon, transformPost } from '@/transformers'
 import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, NormalizedCoupon, NormalizedPost } from '@/types'
 
-// 20 items per step keeps each Inngest step well under Vercel's 60s limit
-// (20 × 500ms sleep = 10s, leaving plenty of headroom)
-const BATCH = 20
+// 10 items per upload step: ~5–15s each, safely under Vercel's 60s limit
+const UPLOAD_BATCH = 10
+// 5 WooCommerce pages per fetch step: 500 items/step, ~5–15s at 1–3s/page
+const WC_PAGES_PER_STEP = 5
+const WC_PAGE_SIZE = 100
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
@@ -40,61 +42,95 @@ export const migrationFunction = inngest.createFunction(
       accessToken: job.shopifyAccessToken,
     })
 
-    const limit = job.isDemo ? 10 : undefined
+    const isDemo = job.isDemo
+    const DEMO_LIMIT = 10
 
     await db.migrationJob.update({
       where: { id: jobId },
       data: { status: 'RUNNING', startedAt: new Date() },
     })
 
-    // ── Phase 1: Fetch everything in parallel ─────────────────────────────────
-    // Also fetch existing Shopify order IDs upfront for deduplication on retry.
-    const [products, customers, orders, coupons, posts, existingOrderIdsArr] = await Promise.all([
-      step.run('fetch-products', async () => {
-        const items = await wc.getAllProducts(limit)
-        await db.migrationJob.update({ where: { id: jobId }, data: { totalProducts: items.length } })
-        return items
-      }),
-      step.run('fetch-customers', async () => {
-        const items = await wc.getAllCustomers(limit)
-        await db.migrationJob.update({ where: { id: jobId }, data: { totalCustomers: items.length } })
-        return items
-      }),
-      step.run('fetch-orders', async () => {
-        const items = await wc.getAllOrders(limit)
-        await db.migrationJob.update({ where: { id: jobId }, data: { totalOrders: items.length } })
-        return items
-      }),
-      step.run('fetch-coupons', async () => {
-        const items = await wc.getAllCoupons(limit)
-        await db.migrationJob.update({ where: { id: jobId }, data: { totalCoupons: items.length } })
-        return items
-      }),
-      step.run('fetch-posts', async () => {
-        const items = await wc.getAllPosts(limit)
-        await db.migrationJob.update({ where: { id: jobId }, data: { totalPosts: items.length } })
-        return items
-      }),
-      // Snapshot of already-migrated orders — used to skip duplicates on retry
+    // ── Phase 1: Count + existing-order snapshot (all in parallel) ────────────
+    const [orderCount, customerCount, existingOrderIdsArr, products, coupons, posts] = await Promise.all([
+      step.run('count-orders', async () => wc.getCount('/orders')),
+      step.run('count-customers', async () => wc.getCount('/customers')),
+      // Snapshot already-migrated orders by wc_order_id note attribute for dedup
       step.run('check-existing-orders', async () => {
         const set = await shopify.getExistingOrderSourceIds()
         return Array.from(set)
       }),
+      // Products are small enough to fetch all at once
+      step.run('fetch-products', async () => {
+        const items = await wc.getAllProducts(isDemo ? DEMO_LIMIT : undefined)
+        await db.migrationJob.update({ where: { id: jobId }, data: { totalProducts: items.length } })
+        return items
+      }),
+      step.run('fetch-coupons', async () => {
+        const items = await wc.getAllCoupons(isDemo ? DEMO_LIMIT : undefined)
+        await db.migrationJob.update({ where: { id: jobId }, data: { totalCoupons: items.length } })
+        return items
+      }),
+      step.run('fetch-posts', async () => {
+        const items = await wc.getAllPosts(isDemo ? DEMO_LIMIT : undefined)
+        await db.migrationJob.update({ where: { id: jobId }, data: { totalPosts: items.length } })
+        return items
+      }),
     ])
 
+    // Clamp counts for demo mode
+    const effectiveOrderCount = isDemo ? Math.min(DEMO_LIMIT, orderCount as number) : (orderCount as number)
+    const effectiveCustomerCount = isDemo ? Math.min(DEMO_LIMIT, customerCount as number) : (customerCount as number)
+
+    await db.migrationJob.update({
+      where: { id: jobId },
+      data: {
+        totalOrders: effectiveOrderCount,
+        totalCustomers: effectiveCustomerCount,
+      },
+    })
+
+    // ── Phase 2: Fetch orders + customers in parallel page-range steps ────────
+    // Each step fetches WC_PAGES_PER_STEP pages (500 items). This keeps every
+    // fetch step under ~15s even on slow WooCommerce servers (5 pages × 3s).
+    const orderPageStepCount = Math.ceil(effectiveOrderCount / (WC_PAGE_SIZE * WC_PAGES_PER_STEP))
+    const customerPageStepCount = Math.ceil(effectiveCustomerCount / (WC_PAGE_SIZE * WC_PAGES_PER_STEP))
+
+    const [orderChunks, customerChunks] = await Promise.all([
+      Promise.all(
+        Array.from({ length: Math.max(1, orderPageStepCount) }, (_, i) =>
+          step.run(`fetch-orders-${i}`, async () => {
+            const startPage = i * WC_PAGES_PER_STEP + 1
+            const items = await wc.getOrdersInRange(startPage, WC_PAGES_PER_STEP)
+            return items.slice(0, Math.max(0, effectiveOrderCount - i * WC_PAGE_SIZE * WC_PAGES_PER_STEP))
+          })
+        )
+      ),
+      Promise.all(
+        Array.from({ length: Math.max(1, customerPageStepCount) }, (_, i) =>
+          step.run(`fetch-customers-${i}`, async () => {
+            const startPage = i * WC_PAGES_PER_STEP + 1
+            const items = await wc.getCustomersInRange(startPage, WC_PAGES_PER_STEP)
+            return items.slice(0, Math.max(0, effectiveCustomerCount - i * WC_PAGE_SIZE * WC_PAGES_PER_STEP))
+          })
+        )
+      ),
+    ])
+
+    const orders = (orderChunks as NormalizedOrder[][]).flat()
+    const customers = (customerChunks as NormalizedCustomer[][]).flat()
     const existingOrders = new Set<string>(existingOrderIdsArr as string[])
 
-    // ── Phase 2: Upload in parallel across entity types ───────────────────────
-    // Within each entity type, batches run SEQUENTIALLY so Shopify's rate limit
-    // (2 req/s) isn't overwhelmed. Across entity types they run in parallel.
-    // Each batch = 20 items × 500ms = ~10s → well within Vercel's 60s limit.
-    const productBatches = chunk(products as NormalizedProduct[], BATCH)
-    const customerBatches = chunk(customers as NormalizedCustomer[], BATCH)
-    const orderBatches = chunk(orders as NormalizedOrder[], BATCH)
+    // ── Phase 3: Upload in parallel across entity types ───────────────────────
+    // Within each entity type, batches run SEQUENTIALLY — keeps Shopify API
+    // load to ~1 req/s per entity type (3 types × 1 req/s = 3 req/s total,
+    // within the 40-burst / 2 req/s steady-state limit with 429 retry).
+    const productBatches = chunk(products as NormalizedProduct[], UPLOAD_BATCH)
+    const customerBatches = chunk(customers, UPLOAD_BATCH)
+    const orderBatches = chunk(orders, UPLOAD_BATCH)
 
     await Promise.all([
 
-      // Products — sequential batches
+      // ── Products ──
       (async () => {
         for (let i = 0; i < productBatches.length; i++) {
           await step.run(`upload-products-${i}`, async () => {
@@ -104,7 +140,6 @@ export const migrationFunction = inngest.createFunction(
                 await db.migrationJob.update({ where: { id: jobId }, data: { doneProducts: { increment: 1 } } })
               } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err)
-                // Handle already taken (duplicate) as success
                 if (msg.includes('handle') && msg.includes('already been taken')) {
                   await db.migrationJob.update({ where: { id: jobId }, data: { doneProducts: { increment: 1 } } })
                   continue
@@ -117,7 +152,7 @@ export const migrationFunction = inngest.createFunction(
         }
       })(),
 
-      // Customers — sequential batches
+      // ── Customers ──
       (async () => {
         for (let i = 0; i < customerBatches.length; i++) {
           await step.run(`upload-customers-${i}`, async () => {
@@ -135,12 +170,11 @@ export const migrationFunction = inngest.createFunction(
         }
       })(),
 
-      // Orders — sequential batches, skip already-migrated ones
+      // ── Orders ──
       (async () => {
         for (let i = 0; i < orderBatches.length; i++) {
           await step.run(`upload-orders-${i}`, async () => {
             for (const order of orderBatches[i]) {
-              // Skip if this WC order was already migrated (deduplication on retry)
               if (existingOrders.has(order.sourceId)) {
                 await db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: 1 } } })
                 continue
@@ -158,7 +192,7 @@ export const migrationFunction = inngest.createFunction(
         }
       })(),
 
-      // Coupons — single step (typically few)
+      // ── Coupons ──
       step.run('upload-coupons', async () => {
         for (const coupon of coupons as NormalizedCoupon[]) {
           try {
@@ -168,7 +202,7 @@ export const migrationFunction = inngest.createFunction(
         }
       }),
 
-      // Blog Posts — single step (typically few)
+      // ── Blog Posts ──
       step.run('upload-posts', async () => {
         for (const post of posts as NormalizedPost[]) {
           try {

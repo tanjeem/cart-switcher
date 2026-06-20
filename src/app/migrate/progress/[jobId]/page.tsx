@@ -1,12 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useEffect, useState, useCallback } from 'react'
+import { useParams, useRouter } from 'next/navigation'
 import type { MigrationProgress } from '@/types'
 
 export default function ProgressPage() {
   const { jobId } = useParams<{ jobId: string }>()
+  const router = useRouter()
   const [progress, setProgress] = useState<MigrationProgress | null>(null)
+  const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
     const es = new EventSource(`/api/progress/${jobId}`)
@@ -21,8 +23,28 @@ export default function ProgressPage() {
     return () => es.close()
   }, [jobId])
 
-  const isDone = progress?.status === 'DONE' || progress?.status === 'PARTIAL'
+  const handleRetry = useCallback(async () => {
+    setRetrying(true)
+    try {
+      const res = await fetch('/api/jobs/retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId }),
+      })
+      const data = await res.json()
+      if (data.jobId) {
+        router.push(`/migrate/progress/${data.jobId}`)
+      }
+    } catch {
+      setRetrying(false)
+    }
+  }, [jobId, router])
+
+  const isDone = progress?.status === 'DONE'
+  const isPartial = progress?.status === 'PARTIAL'
   const isFailed = progress?.status === 'FAILED'
+  const isRunning = progress?.status === 'RUNNING' || progress?.status === 'PENDING'
+  const canRetry = isPartial || isFailed || isRunning
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4 py-12">
@@ -102,42 +124,37 @@ export default function ProgressPage() {
           </div>
         )}
 
+        {/* Retry banner — shown whenever migration isn't cleanly DONE */}
+        {canRetry && progress && (
+          <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-amber-900">
+                {isRunning ? 'Migration stuck or taking too long?' : 'Some items failed to migrate.'}
+              </p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                Retry reuses the same credentials. Already-migrated items are skipped automatically.
+              </p>
+            </div>
+            <button
+              onClick={handleRetry}
+              disabled={retrying}
+              className="shrink-0 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+            >
+              {retrying ? 'Starting...' : 'Retry'}
+            </button>
+          </div>
+        )}
+
         {isDone && (
           <div className="mt-6 bg-green-50 border border-green-200 rounded-xl p-5 text-center">
             <div className="text-2xl mb-2">🎉</div>
             <p className="font-semibold text-green-800 mb-1">Migration complete!</p>
-            <p className="text-sm text-green-700 mb-4">
-              Your store data has been migrated to Shopify.
-              {progress?.status === 'PARTIAL' && ' Some items failed — retry below or check your dashboard.'}
-            </p>
-            <div className="flex gap-3 justify-center flex-wrap">
-              <a
-                href="/dashboard"
-                className="inline-block bg-black text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
-              >
-                View dashboard
-              </a>
-              {progress?.status === 'PARTIAL' && (
-                <a
-                  href="/migrate/connect"
-                  className="inline-block bg-white border border-gray-300 text-gray-700 px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
-                >
-                  Retry migration
-                </a>
-              )}
-            </div>
-          </div>
-        )}
-
-        {isFailed && (
-          <div className="mt-6 bg-red-50 border border-red-200 rounded-xl p-5 text-center">
-            <p className="font-semibold text-red-800 mb-1">Migration failed</p>
-            <p className="text-sm text-red-600 mb-4">Check your credentials and try again.</p>
+            <p className="text-sm text-green-700 mb-4">Your store data has been migrated to Shopify.</p>
             <a
-              href="/migrate/connect"
-              className="inline-block bg-black text-white px-5 py-2 rounded-lg text-sm font-medium"
+              href="/dashboard"
+              className="inline-block bg-black text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-gray-800 transition-colors"
             >
-              Try again
+              View dashboard
             </a>
           </div>
         )}
