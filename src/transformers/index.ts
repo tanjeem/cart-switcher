@@ -81,8 +81,16 @@ export function transformCustomer(c: NormalizedCustomer) {
 
 function sanitizePhone(phone?: string): string | null {
   if (!phone) return null
-  const digits = phone.replace(/\D/g, '')
+  const trimmed = phone.trim()
+  // Already has explicit + country code prefix → strip non-digits and keep
+  if (trimmed.startsWith('+')) {
+    const digits = trimmed.slice(1).replace(/\D/g, '')
+    return digits.length >= 7 ? `+${digits}` : null
+  }
+  const digits = trimmed.replace(/\D/g, '')
   if (digits.length < 7) return null
+  // Leading 0 means local format — country code unknown, drop it to avoid invalid E.164
+  if (digits.startsWith('0')) return null
   return `+${digits}`
 }
 
@@ -118,7 +126,7 @@ export function transformOrder(o: NormalizedOrder) {
       province: o.shippingAddress.province ?? '',
       zip: o.shippingAddress.zip,
       country: o.shippingAddress.country,
-      phone: o.shippingAddress.phone ?? null,
+      phone: sanitizePhone(o.shippingAddress.phone),
     } : null,
     billing_address: o.billingAddress ? {
       first_name: o.billingAddress.firstName,
@@ -129,8 +137,10 @@ export function transformOrder(o: NormalizedOrder) {
       province: o.billingAddress.province ?? '',
       zip: o.billingAddress.zip,
       country: o.billingAddress.country,
-      phone: o.billingAddress.phone ?? null,
+      phone: sanitizePhone(o.billingAddress.phone),
     } : null,
+    // Used for deduplication on retry — lets us find already-migrated orders
+    note_attributes: [{ name: 'wc_order_id', value: o.sourceId }],
     discount_codes: o.discountCodes.map(code => ({
       code,
       amount: '0',

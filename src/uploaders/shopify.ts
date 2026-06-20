@@ -39,6 +39,36 @@ export class ShopifyUploader {
     })
   }
 
+  async getExistingOrderSourceIds(): Promise<Set<string>> {
+    const existing = new Set<string>()
+    let path = `/orders.json?limit=250&status=any&fields=id,note_attributes`
+
+    while (path) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await this.client.get(path)
+      const orders: { note_attributes?: { name: string; value: string }[] }[] = res.data.orders ?? []
+
+      for (const order of orders) {
+        const attr = order.note_attributes?.find(a => a.name === 'wc_order_id')
+        if (attr) existing.add(attr.value)
+      }
+
+      // Follow Shopify's Link header for next page
+      const link: string = res.headers['link'] ?? ''
+      const match = link.match(/<([^>]+)>;\s*rel="next"/)
+      if (match) {
+        try {
+          const parsed = new URL(match[1])
+          path = parsed.pathname.replace(/.*\/admin\/api\/[^/]+/, '') + parsed.search
+        } catch { path = '' }
+      } else {
+        path = ''
+      }
+    }
+
+    return existing
+  }
+
   async validate(): Promise<boolean> {
     try {
       await this.client.get('/shop.json')
