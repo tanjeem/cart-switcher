@@ -180,6 +180,18 @@ export default function ProgressPage() {
           </div>
         )}
 
+        {/* Tools link — always visible once migration has started */}
+        {progress && (
+          <div className="mt-4 text-center">
+            <a
+              href={`/migrate/dedup/${jobId}`}
+              className="text-sm text-gray-500 hover:text-gray-800 underline underline-offset-2"
+            >
+              Remove duplicate products
+            </a>
+          </div>
+        )}
+
         {isDone && (
           <div className="mt-6 bg-green-50 border border-green-200 rounded-xl p-5 text-center">
             <div className="text-2xl mb-2">🎉</div>

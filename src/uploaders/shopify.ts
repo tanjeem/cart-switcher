@@ -47,6 +47,40 @@ export class ShopifyUploader {
     } catch { return '' }
   }
 
+  // ── Product duplicate scanner (by title, any origin) ─────────────────────
+  // Groups ALL Shopify products by lowercase title. Returns every group that
+  // has more than one product, with IDs sorted oldest→newest so callers know
+  // which one to keep (lowest ID = oldest).
+  async getAllProductDuplicatesByTitle(): Promise<{
+    title: string
+    image?: string
+    ids: number[]   // sorted oldest→newest; keep ids[0], delete the rest
+  }[]> {
+    const byTitle = new Map<string, { id: number; title: string; image?: string }[]>()
+    let path = `/products.json?limit=250&fields=id,title,images`
+    while (path) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await this.client.get(path)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const p of (res.data.products ?? []) as any[]) {
+        const key = (p.title ?? '').trim().toLowerCase()
+        if (!key) continue
+        const list = byTitle.get(key) ?? []
+        list.push({ id: p.id, title: p.title, image: p.images?.[0]?.src })
+        byTitle.set(key, list)
+      }
+      path = this.parseNextPath(res.headers['link'] ?? '')
+    }
+    const result: { title: string; image?: string; ids: number[] }[] = []
+    for (const items of byTitle.values()) {
+      if (items.length > 1) {
+        items.sort((a, b) => a.id - b.id)
+        result.push({ title: items[0].title, image: items[0].image, ids: items.map(i => i.id) })
+      }
+    }
+    return result.sort((a, b) => a.title.localeCompare(b.title))
+  }
+
   // ── Deduplication helpers ─────────────────────────────────────────────────
   // These methods only look at items tagged/attributed by CartSwitcher, so they
   // never touch products/orders the merchant created themselves.
