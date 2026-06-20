@@ -9,6 +9,7 @@ export default function ProgressPage() {
   const router = useRouter()
   const [progress, setProgress] = useState<MigrationProgress | null>(null)
   const [retrying, setRetrying] = useState(false)
+  const [cleaning, setCleaning] = useState(false)
 
   useEffect(() => {
     const es = new EventSource(`/api/progress/${jobId}`)
@@ -32,11 +33,25 @@ export default function ProgressPage() {
         body: JSON.stringify({ jobId }),
       })
       const data = await res.json()
-      if (data.jobId) {
-        router.push(`/migrate/progress/${data.jobId}`)
-      }
+      if (data.jobId) router.push(`/migrate/progress/${data.jobId}`)
     } catch {
       setRetrying(false)
+    }
+  }, [jobId, router])
+
+  const handleCleanRetry = useCallback(async () => {
+    if (!confirm('This will delete ALL products, customers, and orders from your Shopify store before re-migrating. Continue?')) return
+    setCleaning(true)
+    try {
+      const res = await fetch('/api/jobs/clean-retry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId }),
+      })
+      const data = await res.json()
+      if (data.jobId) router.push(`/migrate/progress/${data.jobId}`)
+    } catch {
+      setCleaning(false)
     }
   }, [jobId, router])
 
@@ -124,24 +139,44 @@ export default function ProgressPage() {
           </div>
         )}
 
-        {/* Retry banner — shown whenever migration isn't cleanly DONE */}
+        {/* Action buttons — shown whenever migration isn't cleanly DONE */}
         {canRetry && progress && (
-          <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium text-amber-900">
-                {isRunning ? 'Migration stuck or taking too long?' : 'Some items failed to migrate.'}
-              </p>
-              <p className="text-xs text-amber-700 mt-0.5">
-                Retry reuses the same credentials. Already-migrated items are skipped automatically.
-              </p>
+          <div className="mt-4 space-y-3">
+            {/* Retry: skip already-migrated items */}
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-amber-900">
+                  {isRunning ? 'Migration stuck or taking too long?' : 'Some items failed to migrate.'}
+                </p>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Continues where it left off — already-migrated orders are skipped.
+                </p>
+              </div>
+              <button
+                onClick={handleRetry}
+                disabled={retrying || cleaning}
+                className="shrink-0 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              >
+                {retrying ? 'Starting...' : 'Retry'}
+              </button>
             </div>
-            <button
-              onClick={handleRetry}
-              disabled={retrying}
-              className="shrink-0 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-            >
-              {retrying ? 'Starting...' : 'Retry'}
-            </button>
+
+            {/* Clean & Retry: wipe Shopify data first, then re-migrate from scratch */}
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-red-900">Duplicate products / customers / orders?</p>
+                <p className="text-xs text-red-700 mt-0.5">
+                  Deletes <strong>everything</strong> from Shopify first, then migrates clean. Use on test stores.
+                </p>
+              </div>
+              <button
+                onClick={handleCleanRetry}
+                disabled={retrying || cleaning}
+                className="shrink-0 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors whitespace-nowrap"
+              >
+                {cleaning ? 'Cleaning...' : 'Clean & Retry'}
+              </button>
+            </div>
           </div>
         )}
 

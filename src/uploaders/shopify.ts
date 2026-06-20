@@ -39,6 +39,63 @@ export class ShopifyUploader {
     })
   }
 
+  private parseNextPath(linkHeader: string): string {
+    const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/)
+    if (!match) return ''
+    try {
+      const parsed = new URL(match[1])
+      return parsed.pathname.replace(/.*\/admin\/api\/[^/]+/, '') + parsed.search
+    } catch { return '' }
+  }
+
+  async getAllProductIds(): Promise<number[]> {
+    const ids: number[] = []
+    let path = `/products.json?limit=250&fields=id`
+    while (path) {
+      const res = await this.client.get(path)
+      for (const p of (res.data.products ?? [])) ids.push(p.id)
+      path = this.parseNextPath(res.headers['link'] ?? '')
+    }
+    return ids
+  }
+
+  async getAllCustomerIds(): Promise<number[]> {
+    const ids: number[] = []
+    let path = `/customers.json?limit=250&fields=id`
+    while (path) {
+      const res = await this.client.get(path)
+      for (const c of (res.data.customers ?? [])) ids.push(c.id)
+      path = this.parseNextPath(res.headers['link'] ?? '')
+    }
+    return ids
+  }
+
+  async getAllOrderIds(): Promise<number[]> {
+    const ids: number[] = []
+    let path = `/orders.json?limit=250&status=any&fields=id`
+    while (path) {
+      const res = await this.client.get(path)
+      for (const o of (res.data.orders ?? [])) ids.push(o.id)
+      path = this.parseNextPath(res.headers['link'] ?? '')
+    }
+    return ids
+  }
+
+  async deleteProduct(id: number): Promise<void> {
+    await this.client.delete(`/products/${id}.json`)
+    await sleep(500)
+  }
+
+  async deleteCustomer(id: number): Promise<void> {
+    await this.client.delete(`/customers/${id}.json`)
+    await sleep(500)
+  }
+
+  async deleteOrder(id: number): Promise<void> {
+    await this.client.delete(`/orders/${id}.json`)
+    await sleep(500)
+  }
+
   async getExistingOrderSourceIds(): Promise<Set<string>> {
     const existing = new Set<string>()
     let path = `/orders.json?limit=250&status=any&fields=id,note_attributes`
