@@ -162,20 +162,28 @@ export const migrationFunction = inngest.createFunction(
       (async () => {
         for (let i = 0; i < productBatches.length; i++) {
           await step.run(`upload-products-${i}`, async () => {
+            let done = 0
+            let failed = 0
+            const failedLogs: { entityId: string; message: string }[] = []
             for (const product of productBatches[i]) {
               try {
                 await shopify.createProduct(transformProduct(product))
-                await db.migrationJob.update({ where: { id: jobId }, data: { doneProducts: { increment: 1 } } })
+                done++
               } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err)
                 if (msg.includes('handle') && msg.includes('already been taken')) {
-                  await db.migrationJob.update({ where: { id: jobId }, data: { doneProducts: { increment: 1 } } })
+                  done++
                   continue
                 }
-                await db.migrationLog.create({ data: { jobId, entity: 'product', entityId: product.sourceId, status: 'failed', message: msg } })
-                await db.migrationJob.update({ where: { id: jobId }, data: { failedProducts: { increment: 1 } } })
+                failedLogs.push({ entityId: product.sourceId, message: msg })
+                failed++
               }
             }
+            // Flush counters + logs in one shot at end of step
+            await Promise.all([
+              db.migrationJob.update({ where: { id: jobId }, data: { doneProducts: { increment: done }, failedProducts: { increment: failed } } }),
+              ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'product', entityId: l.entityId, status: 'failed', message: l.message } })),
+            ])
           })
         }
       })(),
@@ -184,16 +192,23 @@ export const migrationFunction = inngest.createFunction(
       (async () => {
         for (let i = 0; i < customerBatches.length; i++) {
           await step.run(`upload-customers-${i}`, async () => {
+            let done = 0
+            let failed = 0
+            const failedLogs: { entityId: string; message: string }[] = []
             for (const customer of customerBatches[i]) {
               try {
                 await shopify.createCustomer(transformCustomer(customer))
-                await db.migrationJob.update({ where: { id: jobId }, data: { doneCustomers: { increment: 1 } } })
+                done++
               } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err)
-                await db.migrationLog.create({ data: { jobId, entity: 'customer', entityId: customer.sourceId, status: 'failed', message: msg } })
-                await db.migrationJob.update({ where: { id: jobId }, data: { failedCustomers: { increment: 1 } } })
+                failedLogs.push({ entityId: customer.sourceId, message: msg })
+                failed++
               }
             }
+            await Promise.all([
+              db.migrationJob.update({ where: { id: jobId }, data: { doneCustomers: { increment: done }, failedCustomers: { increment: failed } } }),
+              ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'customer', entityId: l.entityId, status: 'failed', message: l.message } })),
+            ])
           })
         }
       })(),
@@ -202,20 +217,27 @@ export const migrationFunction = inngest.createFunction(
       (async () => {
         for (let i = 0; i < orderBatches.length; i++) {
           await step.run(`upload-orders-${i}`, async () => {
+            let done = 0
+            let failed = 0
+            const failedLogs: { entityId: string; message: string }[] = []
             for (const order of orderBatches[i]) {
               if (existingOrders.has(order.sourceId)) {
-                await db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: 1 } } })
+                done++
                 continue
               }
               try {
                 await shopify.createOrder(transformOrder(order))
-                await db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: 1 } } })
+                done++
               } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err)
-                await db.migrationLog.create({ data: { jobId, entity: 'order', entityId: order.sourceId, status: 'failed', message: msg } })
-                await db.migrationJob.update({ where: { id: jobId }, data: { failedOrders: { increment: 1 } } })
+                failedLogs.push({ entityId: order.sourceId, message: msg })
+                failed++
               }
             }
+            await Promise.all([
+              db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: done }, failedOrders: { increment: failed } } }),
+              ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'order', entityId: l.entityId, status: 'failed', message: l.message } })),
+            ])
           })
         }
       })(),
