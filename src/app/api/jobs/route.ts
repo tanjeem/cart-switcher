@@ -6,7 +6,7 @@ import { inngest } from '@/inngest/client'
 export async function POST(req: Request) {
   const { userId } = await auth()
   const body = await req.json()
-  const { wcUrl, wcKey, wcSecret, shopifyDomain, shopifyAccessToken, isDemo } = body
+  const { wcUrl, wcKey, wcSecret, shopifyDomain, shopifyAccessToken, isDemo, entities } = body
 
   // Get or create user — works with or without auth
   let dbUserId: string
@@ -49,7 +49,7 @@ export async function POST(req: Request) {
 
   await inngest.send({
     name: 'migration/start',
-    data: { jobId: job.id },
+    data: { jobId: job.id, ...(entities ? { entities } : {}) },
   })
 
   return NextResponse.json({ jobId: job.id })

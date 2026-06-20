@@ -2,7 +2,19 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import type { MigrationProgress } from '@/types'
+import type { MigrationProgress, MigrationEntities } from '@/types'
+
+const ENTITY_DEFS: { key: keyof MigrationEntities; label: string; icon: string }[] = [
+  { key: 'products',  label: 'Products',   icon: '📦' },
+  { key: 'customers', label: 'Customers',  icon: '👥' },
+  { key: 'orders',    label: 'Orders',     icon: '🧾' },
+  { key: 'coupons',   label: 'Coupons',    icon: '🏷️' },
+  { key: 'posts',     label: 'Blog Posts', icon: '📝' },
+]
+
+const ALL_ON: MigrationEntities = {
+  products: true, customers: true, orders: true, coupons: true, posts: true,
+}
 
 export default function ProgressPage() {
   const { jobId } = useParams<{ jobId: string }>()
@@ -10,6 +22,7 @@ export default function ProgressPage() {
   const [progress, setProgress] = useState<MigrationProgress | null>(null)
   const [retrying, setRetrying] = useState(false)
   const [cleaning, setCleaning] = useState(false)
+  const [entities, setEntities] = useState<MigrationEntities>(ALL_ON)
 
   useEffect(() => {
     const es = new EventSource(`/api/progress/${jobId}`)
@@ -24,42 +37,54 @@ export default function ProgressPage() {
     return () => es.close()
   }, [jobId])
 
+  const toggleEntity = (key: keyof MigrationEntities) => {
+    setEntities(prev => {
+      const next = { ...prev, [key]: !prev[key] }
+      // Prevent deselecting all
+      const anyOn = Object.values(next).some(Boolean)
+      return anyOn ? next : prev
+    })
+  }
+
   const handleRetry = useCallback(async () => {
     setRetrying(true)
     try {
       const res = await fetch('/api/jobs/retry', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId }),
+        body: JSON.stringify({ jobId, entities }),
       })
       const data = await res.json()
       if (data.jobId) router.push(`/migrate/progress/${data.jobId}`)
     } catch {
       setRetrying(false)
     }
-  }, [jobId, router])
+  }, [jobId, router, entities])
 
   const handleCleanRetry = useCallback(async () => {
-    if (!confirm('This will delete ALL products, customers, and orders from your Shopify store before re-migrating. Continue?')) return
+    if (!confirm('This will delete CartSwitcher-created products and orders from Shopify before re-migrating. Continue?')) return
     setCleaning(true)
     try {
       const res = await fetch('/api/jobs/clean-retry', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId }),
+        body: JSON.stringify({ jobId, entities }),
       })
       const data = await res.json()
       if (data.jobId) router.push(`/migrate/progress/${data.jobId}`)
     } catch {
       setCleaning(false)
     }
-  }, [jobId, router])
+  }, [jobId, router, entities])
 
-  const isDone = progress?.status === 'DONE'
+  const isDone    = progress?.status === 'DONE'
   const isPartial = progress?.status === 'PARTIAL'
-  const isFailed = progress?.status === 'FAILED'
+  const isFailed  = progress?.status === 'FAILED'
   const isRunning = progress?.status === 'RUNNING' || progress?.status === 'PENDING'
-  const canRetry = isPartial || isFailed || isRunning
+  const canRetry  = isPartial || isFailed || isRunning
+
+  // A row is "active" if its total > 0, or it hasn't been zeroed yet (null/0 before first update)
+  const rowVisible = (total: number, done: number) => total > 0 || done > 0
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4 py-12">
@@ -84,41 +109,21 @@ export default function ProgressPage() {
 
           {progress && (
             <>
-              <ProgressRow
-                label="Products"
-                icon="📦"
-                done={progress.doneProducts}
-                total={progress.totalProducts}
-                failed={progress.failedProducts}
-              />
-              <ProgressRow
-                label="Customers"
-                icon="👥"
-                done={progress.doneCustomers}
-                total={progress.totalCustomers}
-                failed={progress.failedCustomers}
-              />
-              <ProgressRow
-                label="Orders"
-                icon="🧾"
-                done={progress.doneOrders}
-                total={progress.totalOrders}
-                failed={progress.failedOrders}
-              />
-              <ProgressRow
-                label="Coupons"
-                icon="🏷️"
-                done={progress.doneCoupons}
-                total={progress.totalCoupons}
-                failed={0}
-              />
-              <ProgressRow
-                label="Blog Posts"
-                icon="📝"
-                done={progress.donePosts}
-                total={progress.totalPosts}
-                failed={0}
-              />
+              {rowVisible(progress.totalProducts, progress.doneProducts) && (
+                <ProgressRow label="Products"   icon="📦" done={progress.doneProducts}  total={progress.totalProducts}  failed={progress.failedProducts} />
+              )}
+              {rowVisible(progress.totalCustomers, progress.doneCustomers) && (
+                <ProgressRow label="Customers"  icon="👥" done={progress.doneCustomers} total={progress.totalCustomers} failed={progress.failedCustomers} />
+              )}
+              {rowVisible(progress.totalOrders, progress.doneOrders) && (
+                <ProgressRow label="Orders"     icon="🧾" done={progress.doneOrders}    total={progress.totalOrders}    failed={progress.failedOrders} />
+              )}
+              {rowVisible(progress.totalCoupons, progress.doneCoupons) && (
+                <ProgressRow label="Coupons"    icon="🏷️" done={progress.doneCoupons}   total={progress.totalCoupons}   failed={0} />
+              )}
+              {rowVisible(progress.totalPosts, progress.donePosts) && (
+                <ProgressRow label="Blog Posts" icon="📝" done={progress.donePosts}     total={progress.totalPosts}     failed={0} />
+              )}
             </>
           )}
         </div>
@@ -139,9 +144,41 @@ export default function ProgressPage() {
           </div>
         )}
 
-        {/* Action buttons — shown whenever migration isn't cleanly DONE */}
+        {/* Retry actions with entity selector */}
         {canRetry && progress && (
           <div className="mt-4 space-y-3">
+            {/* Entity selector */}
+            <div className="bg-white border rounded-2xl p-4 shadow-sm">
+              <p className="text-xs font-semibold text-gray-500 mb-3 uppercase tracking-wide">Select what to migrate</p>
+              <div className="flex flex-wrap gap-2">
+                {ENTITY_DEFS.map(({ key, label, icon }) => {
+                  const on = entities[key]
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => toggleEntity(key)}
+                      disabled={retrying || cleaning}
+                      className={`
+                        flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium
+                        border transition-all duration-150
+                        ${on
+                          ? 'bg-black text-white border-black shadow-sm'
+                          : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700'
+                        }
+                        disabled:opacity-50 disabled:cursor-not-allowed
+                      `}
+                    >
+                      <span>{icon}</span>
+                      {label}
+                      {on && (
+                        <span className="ml-0.5 text-xs opacity-60">✓</span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
             {/* Retry: skip already-migrated items */}
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-4">
               <div>
@@ -161,7 +198,7 @@ export default function ProgressPage() {
               </button>
             </div>
 
-            {/* Fix Duplicates & Retry: remove CartSwitcher duplicates then re-migrate */}
+            {/* Fix Duplicates & Retry */}
             <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-medium text-red-900">Seeing duplicate products or orders?</p>
@@ -241,11 +278,11 @@ function ProgressRow({
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; cls: string }> = {
-    PENDING:  { label: 'Queued',     cls: 'bg-gray-100 text-gray-600' },
-    RUNNING:  { label: 'Running',    cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
-    DONE:     { label: 'Complete',   cls: 'bg-green-50 text-green-700 border border-green-200' },
-    PARTIAL:  { label: 'Partial',    cls: 'bg-yellow-50 text-yellow-700 border border-yellow-200' },
-    FAILED:   { label: 'Failed',     cls: 'bg-red-50 text-red-700 border border-red-200' },
+    PENDING:  { label: 'Queued',    cls: 'bg-gray-100 text-gray-600' },
+    RUNNING:  { label: 'Running',   cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
+    DONE:     { label: 'Complete',  cls: 'bg-green-50 text-green-700 border border-green-200' },
+    PARTIAL:  { label: 'Partial',   cls: 'bg-yellow-50 text-yellow-700 border border-yellow-200' },
+    FAILED:   { label: 'Failed',    cls: 'bg-red-50 text-red-700 border border-red-200' },
   }
   const { label, cls } = map[status] ?? map.PENDING
   return (

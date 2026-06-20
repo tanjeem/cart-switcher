@@ -138,6 +138,23 @@ export interface MigrationError {
   createdAt: string
 }
 
+// Which entity types are included in a migration run
+export interface MigrationEntities {
+  products: boolean
+  customers: boolean
+  orders: boolean
+  coupons: boolean
+  posts: boolean
+}
+
+export const ALL_ENTITIES: MigrationEntities = {
+  products: true,
+  customers: true,
+  orders: true,
+  coupons: true,
+  posts: true,
+}
+
 export interface MigrationProgress {
   jobId: string
   status: string

@@ -6,7 +6,7 @@ import { inngest } from '@/inngest/client'
 export async function POST(req: Request) {
   try {
     const body = await req.json()
-    const { wcUrl, wcKey, wcSecret, shopifyDomain, shopifyAccessToken, isDemo } = body
+    const { wcUrl, wcKey, wcSecret, shopifyDomain, shopifyAccessToken, isDemo, entities } = body
 
     if (!wcUrl || !wcKey || !wcSecret || !shopifyDomain || !shopifyAccessToken) {
       return NextResponse.json({ error: 'All fields are required' }, { status: 400 })
@@ -53,7 +53,7 @@ export async function POST(req: Request) {
 
     await inngest.send({
       name: 'migration/start',
-      data: { jobId: job.id },
+      data: { jobId: job.id, ...(entities ? { entities } : {}) },
     })
 
     return NextResponse.json({ jobId: job.id })

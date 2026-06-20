@@ -4,7 +4,7 @@ import { inngest } from '@/inngest/client'
 
 export async function POST(req: Request) {
   try {
-    const { jobId } = await req.json()
+    const { jobId, entities } = await req.json()
     if (!jobId) return NextResponse.json({ error: 'jobId required' }, { status: 400 })
 
     const old = await db.migrationJob.findUnique({ where: { id: jobId } })
@@ -24,7 +24,7 @@ export async function POST(req: Request) {
       },
     })
 
-    await inngest.send({ name: 'migration/start', data: { jobId: newJob.id } })
+    await inngest.send({ name: 'migration/start', data: { jobId: newJob.id, ...(entities ? { entities } : {}) } })
 
     return NextResponse.json({ jobId: newJob.id })
   } catch (err) {
