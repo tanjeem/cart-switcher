@@ -90,6 +90,8 @@ export function transformOrder(o: NormalizedOrder) {
   return {
     email: o.email,
     phone: sanitizePhone(o.phone),
+    // Links order to existing Shopify customer so their name appears on the order
+    customer: { email: o.email },
     note: o.note ?? null,
     financial_status: o.financialStatus,
     fulfillment_status: o.fulfillmentStatus,

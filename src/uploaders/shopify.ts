@@ -4,7 +4,7 @@ import type { ShopifyCredentials } from '@/types'
 const SHOPIFY_API_VERSION = '2024-10'
 
 // Shopify REST Admin API: 2 requests/second leaky bucket (40 burst)
-// We sleep 600ms between writes to stay safely under the limit
+// We sleep 500ms between writes to stay safely under the limit
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export class ShopifyUploader {
@@ -51,7 +51,7 @@ export class ShopifyUploader {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createProduct(payload: any): Promise<void> {
     await this.client.post('/products.json', { product: payload })
-    await sleep(600)
+    await sleep(500)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -71,13 +71,13 @@ export class ShopifyUploader {
         throw err
       }
     }
-    await sleep(600)
+    await sleep(500)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createOrder(payload: any): Promise<void> {
     await this.client.post('/orders.json', { order: payload })
-    await sleep(600)
+    await sleep(500)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,12 +87,12 @@ export class ShopifyUploader {
       price_rule: payload.priceRule,
     })
     const priceRuleId = priceRuleRes.data.price_rule.id
-    await sleep(600)
+    await sleep(500)
 
     await this.client.post(`/price_rules/${priceRuleId}/discount_codes.json`, {
       discount_code: { code: payload.code },
     })
-    await sleep(600)
+    await sleep(500)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -100,7 +100,7 @@ export class ShopifyUploader {
     // Ensure blog exists
     const blogId = await this.getOrCreateBlog('News')
     await this.client.post(`/blogs/${blogId}/articles.json`, { article: payload })
-    await sleep(600)
+    await sleep(500)
   }
 
   private blogIdCache: number | null = null

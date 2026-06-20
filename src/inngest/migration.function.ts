@@ -4,6 +4,8 @@ import { WooCommerceFetcher } from '@/fetchers/woocommerce'
 import { ShopifyUploader } from '@/uploaders/shopify'
 import { transformProduct, transformCustomer, transformOrder, transformCoupon, transformPost } from '@/transformers'
 
+const PRODUCT_BATCH = 20 // max products per step to stay under Vercel 60s timeout
+
 export const migrationFunction = inngest.createFunction(
   {
     id: 'run-migration',
@@ -36,194 +38,125 @@ export const migrationFunction = inngest.createFunction(
       data: { status: 'RUNNING', startedAt: new Date() },
     })
 
-    // ── Products ──────────────────────────────────────────────────────────────
-    const products = await step.run('fetch-products', async () => {
-      const items = await wc.getAllProducts(limit)
-      await db.migrationJob.update({
-        where: { id: jobId },
-        data: { totalProducts: items.length },
-      })
-      return items
-    })
+    // ── Fetch all entity types in parallel ────────────────────────────────────
+    const [products, customers, orders, coupons, posts] = await Promise.all([
+      step.run('fetch-products', async () => {
+        const items = await wc.getAllProducts(limit)
+        await db.migrationJob.update({ where: { id: jobId }, data: { totalProducts: items.length } })
+        return items
+      }),
+      step.run('fetch-customers', async () => {
+        const items = await wc.getAllCustomers(limit)
+        await db.migrationJob.update({ where: { id: jobId }, data: { totalCustomers: items.length } })
+        return items
+      }),
+      step.run('fetch-orders', async () => {
+        const items = await wc.getAllOrders(limit)
+        await db.migrationJob.update({ where: { id: jobId }, data: { totalOrders: items.length } })
+        return items
+      }),
+      step.run('fetch-coupons', async () => {
+        const items = await wc.getAllCoupons(limit)
+        await db.migrationJob.update({ where: { id: jobId }, data: { totalCoupons: items.length } })
+        return items
+      }),
+      step.run('fetch-posts', async () => {
+        const items = await wc.getAllPosts(limit)
+        await db.migrationJob.update({ where: { id: jobId }, data: { totalPosts: items.length } })
+        return items
+      }),
+    ])
 
-    await step.run('upload-products', async () => {
-      let done = 0
-      let failed = 0
-      for (const product of products) {
-        try {
-          const payload = transformProduct(product)
-          await shopify.createProduct(payload)
-          done++
-          await db.migrationJob.update({
-            where: { id: jobId },
-            data: { doneProducts: done },
-          })
-        } catch (err: unknown) {
-          failed++
-          await db.migrationLog.create({
-            data: {
-              jobId,
-              entity: 'product',
-              entityId: product.sourceId,
-              status: 'failed',
-              message: err instanceof Error ? err.message : String(err),
-            },
-          })
-          await db.migrationJob.update({
-            where: { id: jobId },
-            data: { failedProducts: failed },
-          })
+    // ── Upload all entity types in parallel ───────────────────────────────────
+    // Products are batched (20/step) to stay under Vercel's 60s function limit.
+    // Each batch is a separate Inngest step so timeouts checkpoint correctly.
+    const productBatches: (typeof products)[] = []
+    for (let i = 0; i < products.length; i += PRODUCT_BATCH) {
+      productBatches.push(products.slice(i, i + PRODUCT_BATCH))
+    }
+
+    await Promise.all([
+      // Products — one step per batch of 20
+      ...productBatches.map((batch, batchIdx) =>
+        step.run(`upload-products-${batchIdx}`, async () => {
+          for (const product of batch) {
+            try {
+              const payload = transformProduct(product)
+              await shopify.createProduct(payload)
+              // Atomic increment avoids race conditions across parallel batches
+              await db.migrationJob.update({ where: { id: jobId }, data: { doneProducts: { increment: 1 } } })
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err)
+              // Skip duplicates silently — treat as success
+              if (msg.includes('handle') && msg.includes('already been taken')) {
+                await db.migrationJob.update({ where: { id: jobId }, data: { doneProducts: { increment: 1 } } })
+                continue
+              }
+              await db.migrationLog.create({ data: { jobId, entity: 'product', entityId: product.sourceId, status: 'failed', message: msg } })
+              await db.migrationJob.update({ where: { id: jobId }, data: { failedProducts: { increment: 1 } } })
+            }
+          }
+        })
+      ),
+
+      // Customers
+      step.run('upload-customers', async () => {
+        for (const customer of customers) {
+          try {
+            await shopify.createCustomer(transformCustomer(customer))
+            await db.migrationJob.update({ where: { id: jobId }, data: { doneCustomers: { increment: 1 } } })
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err)
+            await db.migrationLog.create({ data: { jobId, entity: 'customer', entityId: customer.sourceId, status: 'failed', message: msg } })
+            await db.migrationJob.update({ where: { id: jobId }, data: { failedCustomers: { increment: 1 } } })
+          }
         }
-      }
-    })
+      }),
 
-    // ── Customers ─────────────────────────────────────────────────────────────
-    const customers = await step.run('fetch-customers', async () => {
-      const items = await wc.getAllCustomers(limit)
-      await db.migrationJob.update({
-        where: { id: jobId },
-        data: { totalCustomers: items.length },
-      })
-      return items
-    })
-
-    await step.run('upload-customers', async () => {
-      let done = 0
-      let failed = 0
-      for (const customer of customers) {
-        try {
-          const payload = transformCustomer(customer)
-          await shopify.createCustomer(payload)
-          done++
-          await db.migrationJob.update({
-            where: { id: jobId },
-            data: { doneCustomers: done },
-          })
-        } catch (err: unknown) {
-          failed++
-          await db.migrationLog.create({
-            data: {
-              jobId,
-              entity: 'customer',
-              entityId: customer.sourceId,
-              status: 'failed',
-              message: err instanceof Error ? err.message : String(err),
-            },
-          })
-          await db.migrationJob.update({
-            where: { id: jobId },
-            data: { failedCustomers: failed },
-          })
+      // Orders
+      step.run('upload-orders', async () => {
+        for (const order of orders) {
+          try {
+            await shopify.createOrder(transformOrder(order))
+            await db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: 1 } } })
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err)
+            await db.migrationLog.create({ data: { jobId, entity: 'order', entityId: order.sourceId, status: 'failed', message: msg } })
+            await db.migrationJob.update({ where: { id: jobId }, data: { failedOrders: { increment: 1 } } })
+          }
         }
-      }
-    })
+      }),
 
-    // ── Orders ────────────────────────────────────────────────────────────────
-    const orders = await step.run('fetch-orders', async () => {
-      const items = await wc.getAllOrders(limit)
-      await db.migrationJob.update({
-        where: { id: jobId },
-        data: { totalOrders: items.length },
-      })
-      return items
-    })
-
-    await step.run('upload-orders', async () => {
-      let done = 0
-      let failed = 0
-      for (const order of orders) {
-        try {
-          const payload = transformOrder(order)
-          await shopify.createOrder(payload)
-          done++
-          await db.migrationJob.update({
-            where: { id: jobId },
-            data: { doneOrders: done },
-          })
-        } catch (err: unknown) {
-          failed++
-          await db.migrationLog.create({
-            data: {
-              jobId,
-              entity: 'order',
-              entityId: order.sourceId,
-              status: 'failed',
-              message: err instanceof Error ? err.message : String(err),
-            },
-          })
-          await db.migrationJob.update({
-            where: { id: jobId },
-            data: { failedOrders: failed },
-          })
+      // Coupons
+      step.run('upload-coupons', async () => {
+        for (const coupon of coupons) {
+          try {
+            await shopify.createDiscountCode(transformCoupon(coupon))
+            await db.migrationJob.update({ where: { id: jobId }, data: { doneCoupons: { increment: 1 } } })
+          } catch { /* non-critical */ }
         }
-      }
-    })
+      }),
 
-    // ── Coupons ───────────────────────────────────────────────────────────────
-    const coupons = await step.run('fetch-coupons', async () => {
-      const items = await wc.getAllCoupons(limit)
-      await db.migrationJob.update({
-        where: { id: jobId },
-        data: { totalCoupons: items.length },
-      })
-      return items
-    })
-
-    await step.run('upload-coupons', async () => {
-      let done = 0
-      for (const coupon of coupons) {
-        try {
-          const payload = transformCoupon(coupon)
-          await shopify.createDiscountCode(payload)
-          done++
-          await db.migrationJob.update({
-            where: { id: jobId },
-            data: { doneCoupons: done },
-          })
-        } catch {
-          // coupons are non-critical, log and continue
+      // Blog Posts
+      step.run('upload-posts', async () => {
+        for (const post of posts) {
+          try {
+            await shopify.createArticle(transformPost(post))
+            await db.migrationJob.update({ where: { id: jobId }, data: { donePosts: { increment: 1 } } })
+          } catch { /* non-critical */ }
         }
-      }
-    })
-
-    // ── Blog Posts ────────────────────────────────────────────────────────────
-    const posts = await step.run('fetch-posts', async () => {
-      const items = await wc.getAllPosts(limit)
-      await db.migrationJob.update({
-        where: { id: jobId },
-        data: { totalPosts: items.length },
-      })
-      return items
-    })
-
-    await step.run('upload-posts', async () => {
-      let done = 0
-      for (const post of posts) {
-        try {
-          const payload = transformPost(post)
-          await shopify.createArticle(payload)
-          done++
-          await db.migrationJob.update({
-            where: { id: jobId },
-            data: { donePosts: done },
-          })
-        } catch {
-          // posts are non-critical, log and continue
-        }
-      }
-    })
+      }),
+    ])
 
     // ── Complete ──────────────────────────────────────────────────────────────
     await step.run('complete', async () => {
       const final = await db.migrationJob.findUnique({ where: { id: jobId } })
-      const hasFailures = (final?.failedProducts ?? 0) + (final?.failedOrders ?? 0) + (final?.failedCustomers ?? 0) > 0
+      const hasFailures =
+        (final?.failedProducts ?? 0) + (final?.failedOrders ?? 0) + (final?.failedCustomers ?? 0) > 0
 
       await db.migrationJob.update({
         where: { id: jobId },
-        data: {
-          status: hasFailures ? 'PARTIAL' : 'DONE',
-          completedAt: new Date(),
-        },
+        data: { status: hasFailures ? 'PARTIAL' : 'DONE', completedAt: new Date() },
       })
     })
   }

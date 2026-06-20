@@ -16,33 +16,41 @@ export async function GET(
       }
 
       const poll = async () => {
-        const job = await db.migrationJob.findUnique({
-          where: { id: jobId },
-          select: {
-            id: true,
-            status: true,
-            totalProducts: true,
-            totalOrders: true,
-            totalCustomers: true,
-            totalCoupons: true,
-            totalPosts: true,
-            doneProducts: true,
-            doneOrders: true,
-            doneCustomers: true,
-            doneCoupons: true,
-            donePosts: true,
-            failedProducts: true,
-            failedOrders: true,
-            failedCustomers: true,
-          },
-        })
+        const [job, logs] = await Promise.all([
+          db.migrationJob.findUnique({
+            where: { id: jobId },
+            select: {
+              id: true,
+              status: true,
+              totalProducts: true,
+              totalOrders: true,
+              totalCustomers: true,
+              totalCoupons: true,
+              totalPosts: true,
+              doneProducts: true,
+              doneOrders: true,
+              doneCustomers: true,
+              doneCoupons: true,
+              donePosts: true,
+              failedProducts: true,
+              failedOrders: true,
+              failedCustomers: true,
+            },
+          }),
+          db.migrationLog.findMany({
+            where: { jobId, status: 'failed' },
+            orderBy: { createdAt: 'desc' },
+            take: 10,
+            select: { entity: true, entityId: true, message: true, createdAt: true },
+          }),
+        ])
 
         if (!job) {
           controller.close()
           return
         }
 
-        send(job)
+        send({ ...job, recentErrors: logs })
 
         if (job.status === 'DONE' || job.status === 'FAILED' || job.status === 'PARTIAL') {
           controller.close()

@@ -131,6 +131,13 @@ export interface ShopifyCredentials {
   accessToken: string
 }
 
+export interface MigrationError {
+  entity: string
+  entityId: string
+  message: string
+  createdAt: string
+}
+
 export interface MigrationProgress {
   jobId: string
   status: string
@@ -147,6 +154,7 @@ export interface MigrationProgress {
   failedProducts: number
   failedOrders: number
   failedCustomers: number
+  recentErrors?: MigrationError[]
 }
 
 export interface PreviewCounts {
