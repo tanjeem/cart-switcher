@@ -9,10 +9,12 @@ import type {
 export function transformProduct(p: NormalizedProduct) {
   return {
     title: p.title,
+    handle: p.slug,   // explicit handle lets us find the product by handle on retry
     body_html: p.description,
     vendor: p.vendor || 'Default',
     product_type: p.productType,
-    tags: [...p.tags, ...p.categories].join(', '),
+    // cartswitcher-migrated tag lets us identify our own products for safe dedup
+    tags: [...p.tags, ...p.categories, 'cartswitcher-migrated'].join(', '),
     status: p.status,
     metafields_global_title_tag: p.seoTitle,
     metafields_global_description_tag: p.seoDescription,

@@ -161,12 +161,12 @@ export default function ProgressPage() {
               </button>
             </div>
 
-            {/* Clean & Retry: wipe Shopify data first, then re-migrate from scratch */}
+            {/* Fix Duplicates & Retry: remove CartSwitcher duplicates then re-migrate */}
             <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
               <div>
-                <p className="text-sm font-medium text-red-900">Duplicate products / customers / orders?</p>
+                <p className="text-sm font-medium text-red-900">Seeing duplicate products or orders?</p>
                 <p className="text-xs text-red-700 mt-0.5">
-                  Deletes <strong>everything</strong> from Shopify first, then migrates clean. Use on test stores.
+                  Removes only <strong>CartSwitcher-created duplicates</strong> — your other Shopify data is untouched.
                 </p>
               </div>
               <button
@@ -174,7 +174,7 @@ export default function ProgressPage() {
                 disabled={retrying || cleaning}
                 className="shrink-0 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors whitespace-nowrap"
               >
-                {cleaning ? 'Cleaning...' : 'Clean & Retry'}
+                {cleaning ? 'Fixing...' : 'Fix Duplicates & Retry'}
               </button>
             </div>
           </div>

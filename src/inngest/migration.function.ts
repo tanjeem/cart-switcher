@@ -49,51 +49,41 @@ export const migrationFunction = inngest.createFunction(
       data: { status: 'RUNNING', startedAt: new Date() },
     })
 
-    // ── Phase 0 (optional): Delete all existing Shopify data ─────────────────
-    // Triggered by "Clean & Retry". Deletes products, orders (first), then
-    // customers (orders must go first — Shopify won't delete a customer who
-    // has orders attached to them).
+    // ── Phase 0 (optional): Remove CartSwitcher duplicates from Shopify ───────
+    // Triggered by "Fix Duplicates & Retry". Only touches items CartSwitcher
+    // created — identified by the 'cartswitcher-migrated' tag (products) and
+    // note_attributes[wc_order_id] (orders). Never deletes merchant-added items.
     if (cleanFirst) {
-      const [productIds, orderIds, customerIds] = await Promise.all([
-        step.run('cleanup-scan-products', async () => shopify.getAllProductIds()),
-        step.run('cleanup-scan-orders', async () => shopify.getAllOrderIds()),
-        step.run('cleanup-scan-customers', async () => shopify.getAllCustomerIds()),
+      // Scan for duplicates in parallel
+      const [dupProductIds, dupOrderIds] = await Promise.all([
+        step.run('dedup-scan-products', async () => shopify.getCartSwitcherProductDuplicates()),
+        step.run('dedup-scan-orders', async () => shopify.getCartSwitcherOrderDuplicates()),
       ])
 
-      const productIdBatches = chunk(productIds as number[], CLEANUP_BATCH)
-      const orderIdBatches = chunk(orderIds as number[], CLEANUP_BATCH)
+      const dupProductBatches = chunk(dupProductIds as number[], CLEANUP_BATCH)
+      const dupOrderBatches = chunk(dupOrderIds as number[], CLEANUP_BATCH)
 
-      // Delete products and orders in parallel
+      // Delete duplicate products and orders in parallel
       await Promise.all([
         (async () => {
-          for (let i = 0; i < productIdBatches.length; i++) {
-            await step.run(`cleanup-products-${i}`, async () => {
-              for (const id of productIdBatches[i]) {
+          for (let i = 0; i < dupProductBatches.length; i++) {
+            await step.run(`dedup-products-${i}`, async () => {
+              for (const id of dupProductBatches[i]) {
                 try { await shopify.deleteProduct(id) } catch { /* ignore */ }
               }
             })
           }
         })(),
         (async () => {
-          for (let i = 0; i < orderIdBatches.length; i++) {
-            await step.run(`cleanup-orders-${i}`, async () => {
-              for (const id of orderIdBatches[i]) {
+          for (let i = 0; i < dupOrderBatches.length; i++) {
+            await step.run(`dedup-orders-${i}`, async () => {
+              for (const id of dupOrderBatches[i]) {
                 try { await shopify.deleteOrder(id) } catch { /* ignore */ }
               }
             })
           }
         })(),
       ])
-
-      // Customers must be deleted AFTER orders
-      const customerIdBatches = chunk(customerIds as number[], CLEANUP_BATCH)
-      for (let i = 0; i < customerIdBatches.length; i++) {
-        await step.run(`cleanup-customers-${i}`, async () => {
-          for (const id of customerIdBatches[i]) {
-            try { await shopify.deleteCustomer(id) } catch { /* ignore */ }
-          }
-        })
-      }
     }
 
     // ── Phase 1: Count + existing-order snapshot (all in parallel) ────────────

@@ -29,7 +29,6 @@ export class ShopifyUploader {
         await sleep(retryAfter * 1000)
         return this.client.request(error.config)
       }
-      // Surface Shopify's actual error body
       const body = error.response?.data
       const shopifyMsg = body?.errors
         ? (typeof body.errors === 'string' ? body.errors : JSON.stringify(body.errors))
@@ -48,46 +47,69 @@ export class ShopifyUploader {
     } catch { return '' }
   }
 
-  async getAllProductIds(): Promise<number[]> {
-    const ids: number[] = []
-    let path = `/products.json?limit=250&fields=id`
+  // ── Deduplication helpers ─────────────────────────────────────────────────
+  // These methods only look at items tagged/attributed by CartSwitcher, so they
+  // never touch products/orders the merchant created themselves.
+
+  // Returns IDs of duplicate CartSwitcher products (extras beyond one per handle).
+  // Identified by the 'cartswitcher-migrated' tag added during migration.
+  async getCartSwitcherProductDuplicates(): Promise<number[]> {
+    const byHandle = new Map<string, number[]>()
+    let path = `/products.json?limit=250&fields=id,handle,tags`
     while (path) {
       const res = await this.client.get(path)
-      for (const p of (res.data.products ?? [])) ids.push(p.id)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const p of (res.data.products ?? []) as any[]) {
+        const tags: string[] = (p.tags ?? '').split(',').map((t: string) => t.trim())
+        if (!tags.includes('cartswitcher-migrated')) continue
+        const list = byHandle.get(p.handle) ?? []
+        list.push(p.id)
+        byHandle.set(p.handle, list)
+      }
       path = this.parseNextPath(res.headers['link'] ?? '')
     }
-    return ids
+    const toDelete: number[] = []
+    for (const ids of byHandle.values()) {
+      if (ids.length > 1) {
+        ids.sort((a, b) => a - b) // keep lowest ID (oldest), delete the rest
+        toDelete.push(...ids.slice(1))
+      }
+    }
+    return toDelete
   }
 
-  async getAllCustomerIds(): Promise<number[]> {
-    const ids: number[] = []
-    let path = `/customers.json?limit=250&fields=id`
+  // Returns IDs of duplicate CartSwitcher orders (extras beyond one per wc_order_id).
+  // Identified by the note_attributes[wc_order_id] added during migration.
+  async getCartSwitcherOrderDuplicates(): Promise<number[]> {
+    const byWcId = new Map<string, number[]>()
+    let path = `/orders.json?limit=250&status=any&fields=id,note_attributes`
     while (path) {
       const res = await this.client.get(path)
-      for (const c of (res.data.customers ?? [])) ids.push(c.id)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const o of (res.data.orders ?? []) as any[]) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const attr = (o.note_attributes ?? []).find((a: any) => a.name === 'wc_order_id')
+        if (!attr) continue
+        const list = byWcId.get(attr.value) ?? []
+        list.push(o.id)
+        byWcId.set(attr.value, list)
+      }
       path = this.parseNextPath(res.headers['link'] ?? '')
     }
-    return ids
+    const toDelete: number[] = []
+    for (const ids of byWcId.values()) {
+      if (ids.length > 1) {
+        ids.sort((a, b) => a - b) // keep oldest, delete the rest
+        toDelete.push(...ids.slice(1))
+      }
+    }
+    return toDelete
   }
 
-  async getAllOrderIds(): Promise<number[]> {
-    const ids: number[] = []
-    let path = `/orders.json?limit=250&status=any&fields=id`
-    while (path) {
-      const res = await this.client.get(path)
-      for (const o of (res.data.orders ?? [])) ids.push(o.id)
-      path = this.parseNextPath(res.headers['link'] ?? '')
-    }
-    return ids
-  }
+  // ── Delete helpers ────────────────────────────────────────────────────────
 
   async deleteProduct(id: number): Promise<void> {
     await this.client.delete(`/products/${id}.json`)
-    await sleep(500)
-  }
-
-  async deleteCustomer(id: number): Promise<void> {
-    await this.client.delete(`/customers/${id}.json`)
     await sleep(500)
   }
 
@@ -96,35 +118,24 @@ export class ShopifyUploader {
     await sleep(500)
   }
 
+  // ── Existing-order snapshot for skip-on-retry ─────────────────────────────
+
   async getExistingOrderSourceIds(): Promise<Set<string>> {
     const existing = new Set<string>()
     let path = `/orders.json?limit=250&status=any&fields=id,note_attributes`
-
     while (path) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const res = await this.client.get(path)
       const orders: { note_attributes?: { name: string; value: string }[] }[] = res.data.orders ?? []
-
       for (const order of orders) {
         const attr = order.note_attributes?.find(a => a.name === 'wc_order_id')
         if (attr) existing.add(attr.value)
       }
-
-      // Follow Shopify's Link header for next page
-      const link: string = res.headers['link'] ?? ''
-      const match = link.match(/<([^>]+)>;\s*rel="next"/)
-      if (match) {
-        try {
-          const parsed = new URL(match[1])
-          path = parsed.pathname.replace(/.*\/admin\/api\/[^/]+/, '') + parsed.search
-        } catch { path = '' }
-      } else {
-        path = ''
-      }
+      path = this.parseNextPath(res.headers['link'] ?? '')
     }
-
     return existing
   }
+
+  // ── Validation ────────────────────────────────────────────────────────────
 
   async validate(): Promise<boolean> {
     try {
@@ -135,9 +146,27 @@ export class ShopifyUploader {
     }
   }
 
+  // ── Upload methods ────────────────────────────────────────────────────────
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createProduct(payload: any): Promise<void> {
-    await this.client.post('/products.json', { product: payload })
+    try {
+      await this.client.post('/products.json', { product: payload })
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // Handle already taken — find by explicit handle and UPDATE instead of failing
+      if (msg.includes('handle') && msg.includes('already been taken') && payload.handle) {
+        const search = await this.client.get('/products.json', {
+          params: { handle: payload.handle, limit: 1, fields: 'id' },
+        })
+        const existing = search.data.products?.[0]
+        if (existing) {
+          await this.client.put(`/products/${existing.id}.json`, { product: payload })
+        }
+      } else {
+        throw err
+      }
+    }
     await sleep(500)
   }
 
@@ -145,11 +174,13 @@ export class ShopifyUploader {
   async createCustomer(payload: any): Promise<void> {
     try {
       await this.client.post('/customers.json', { customer: payload })
-    } catch (err: any) {
-      // If email already taken, find and update the existing customer
-      const emailTaken = err.message?.includes('already been taken') || err.response?.data?.errors?.email
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const emailTaken = msg.includes('already been taken')
       if (emailTaken && payload.email) {
-        const search = await this.client.get('/customers/search.json', { params: { query: `email:${payload.email}`, limit: 1 } })
+        const search = await this.client.get('/customers/search.json', {
+          params: { query: `email:${payload.email}`, limit: 1 },
+        })
         const existing = search.data.customers?.[0]
         if (existing) {
           await this.client.put(`/customers/${existing.id}.json`, { customer: payload })
@@ -169,13 +200,11 @@ export class ShopifyUploader {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createDiscountCode(payload: any): Promise<void> {
-    // Create a price rule first, then attach the discount code
     const priceRuleRes = await this.client.post('/price_rules.json', {
       price_rule: payload.priceRule,
     })
     const priceRuleId = priceRuleRes.data.price_rule.id
     await sleep(500)
-
     await this.client.post(`/price_rules/${priceRuleId}/discount_codes.json`, {
       discount_code: { code: payload.code },
     })
@@ -184,7 +213,6 @@ export class ShopifyUploader {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createArticle(payload: any): Promise<void> {
-    // Ensure blog exists
     const blogId = await this.getOrCreateBlog('News')
     await this.client.post(`/blogs/${blogId}/articles.json`, { article: payload })
     await sleep(500)
@@ -194,16 +222,10 @@ export class ShopifyUploader {
 
   private async getOrCreateBlog(title: string): Promise<number> {
     if (this.blogIdCache) return this.blogIdCache
-
     const res = await this.client.get('/blogs.json')
     const blogs: { id: number; title: string }[] = res.data.blogs
-
     const existing = blogs.find(b => b.title === title)
-    if (existing) {
-      this.blogIdCache = existing.id
-      return existing.id
-    }
-
+    if (existing) { this.blogIdCache = existing.id; return existing.id }
     const created = await this.client.post('/blogs.json', { blog: { title } })
     this.blogIdCache = created.data.blog.id
     return this.blogIdCache!
