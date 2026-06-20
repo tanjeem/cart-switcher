@@ -6,6 +6,7 @@ const isPublicRoute = createRouteMatcher([
   '/sign-up(.*)',
   '/migrate/connect(.*)',
   '/migrate/progress(.*)',
+  '/migrate/dedup(.*)',
   '/api/connections(.*)',
   '/api/jobs(.*)',
   '/api/jobs/start(.*)',
