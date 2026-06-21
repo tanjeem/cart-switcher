@@ -4,15 +4,34 @@ import type { ShopifyCredentials } from '@/types'
 const SHOPIFY_API_VERSION = '2024-10'
 
 // GraphQL customers: ~5 mutations/s vs REST's 2 req/s.
-// GraphQL orders: requires offline OAuth token; current tokens are online (per-user),
-// so orders must use REST until users reconnect with offline tokens.
+// GraphQL orders: requires offline OAuth token. Detected at runtime via canUseGraphQLOrders().
 const USE_GRAPHQL = true
-const USE_GRAPHQL_ORDERS = false
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export class ShopifyUploader {
   private client: AxiosInstance
+  private gqlOrders = false
+
+  enableGqlOrders() { this.gqlOrders = true }
+
+  /** Probe whether this access token supports GraphQL orderCreate (requires offline token). */
+  async canUseGraphQLOrders(): Promise<boolean> {
+    try {
+      // Empty lineItems will return userErrors, not a permission error, if the token is offline.
+      // An online (per-user) token returns HTTP 403 which the interceptor turns into a thrown Error.
+      await this.gql(`mutation { orderCreate(order: { lineItems: [] }) { userErrors { message } } }`)
+      return true
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // Explicit access/permission failure → online token, must use REST
+      if (msg.includes('403') || msg.toLowerCase().includes('access') || msg.toLowerCase().includes('offline')) {
+        return false
+      }
+      // Any other error (e.g. throttle) — assume capable; per-order errors will be caught normally
+      return true
+    }
+  }
 
   constructor(private creds: ShopifyCredentials) {
     const domain = creds.domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
@@ -43,9 +62,11 @@ export class ShopifyUploader {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     }, async (error: any) => {
       if (error.response?.status === 429) {
+        const retries = (error.config?._429retries ?? 0) as number
+        if (retries >= 3) throw new Error('Shopify 429: rate limit exceeded after 3 retries')
         const retryAfter = parseInt(error.response.headers['retry-after'] ?? '2', 10)
         await sleep(retryAfter * 1000)
-        return this.client.request(error.config)
+        return this.client.request({ ...error.config, _429retries: retries + 1 })
       }
       const body = error.response?.data
       const shopifyMsg = body?.errors
@@ -450,7 +471,7 @@ export class ShopifyUploader {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createOrder(payload: any): Promise<void> {
-    return USE_GRAPHQL_ORDERS ? this.createOrderGql(payload) : this.createOrderRest(payload)
+    return this.gqlOrders ? this.createOrderGql(payload) : this.createOrderRest(payload)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

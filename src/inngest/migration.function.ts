@@ -5,8 +5,10 @@ import { ShopifyUploader } from '@/uploaders/shopify'
 import { transformProduct, transformCustomer, transformOrder, transformCoupon, transformPost } from '@/transformers'
 import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, NormalizedCoupon, NormalizedPost, MigrationEntities } from '@/types'
 
-const UPLOAD_BATCH = 25      // Vercel Hobby cap is 60s; 25 orders × ~600ms = ~15s, safely under
-const WC_PAGES_PER_STEP = 3  // WC pages per fetch step — 3×30s max = 90s, safe under 300s
+const UPLOAD_BATCH = 25           // customers / products — REST, 25 × ~600ms = ~15s under 60s
+const GQL_ORDER_BATCH = 100       // GQL orders: 1000-point bucket restores at 50/s, 100 orders ~15s
+const REST_ORDER_BATCH = 25       // REST orders: limited to 2 req/s, 25 × ~600ms = ~15s
+const WC_PAGES_PER_STEP = 3       // WC pages per fetch step — 3×30s max = 90s, safe under 300s
 const WC_PAGE_SIZE = 100
 const CLEANUP_BATCH = 20      // IDs per delete step
 
@@ -88,6 +90,13 @@ export const migrationFunction = inngest.createFunction(
       return ok
     })
     if (!credentialsOk) return
+
+    // Detect whether this token supports GraphQL orderCreate (offline tokens only).
+    // Result is memoized by Inngest so replays return the cached boolean instantly.
+    const gqlOrdersOk = entities.orders
+      ? await step.run('detect-order-api', () => shopify.canUseGraphQLOrders())
+      : false
+    if (gqlOrdersOk) shopify.enableGqlOrders()
 
     // ── Phase 0 (optional): Remove CartSwitcher duplicates from Shopify ───────
     // Triggered by "Fix Duplicates & Retry". Only touches items CartSwitcher
@@ -221,9 +230,10 @@ export const migrationFunction = inngest.createFunction(
     // Customers then orders upload SEQUENTIALLY to stay under Shopify's 2 req/s
     // rate limit — running both simultaneously causes rate-limit collisions that
     // add 2s retry delays per item, making parallel execution slower overall.
+    const orderBatchSize  = (gqlOrdersOk as boolean) ? GQL_ORDER_BATCH : REST_ORDER_BATCH
     const productBatches  = chunk(products  as NormalizedProduct[], UPLOAD_BATCH)
     const customerBatches = chunk(customers,                         UPLOAD_BATCH)
-    const orderBatches    = chunk(orders,                            UPLOAD_BATCH)
+    const orderBatches    = chunk(orders,                            orderBatchSize)
 
     // Helper: check if this job was cancelled between steps
     const isCancelled = async () => {
