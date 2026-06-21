@@ -306,7 +306,7 @@ export class ShopifyUploader {
       lastName: data.last_name ?? '',
       email: data.email,
       phone: withPhone ? (data.phone || null) : null,
-      acceptsMarketing: data.accepts_marketing ?? false,
+      emailMarketingConsent: { marketingState: (data.accepts_marketing ?? false) ? 'SUBSCRIBED' : 'UNSUBSCRIBED' },
       note: data.note || null,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       addresses: data.addresses?.map((a: any) => ({
