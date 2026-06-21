@@ -22,6 +22,7 @@ export async function GET(
             select: {
               id: true,
               status: true,
+              startedAt: true,
               totalProducts: true,
               totalOrders: true,
               totalCustomers: true,
@@ -52,7 +53,7 @@ export async function GET(
 
         send({ ...job, recentErrors: logs })
 
-        if (job.status === 'DONE' || job.status === 'FAILED' || job.status === 'PARTIAL') {
+        if (job.status === 'DONE' || job.status === 'FAILED' || job.status === 'PARTIAL' || job.status === 'CANCELLED') {
           controller.close()
           return
         }

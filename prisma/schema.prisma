@@ -81,4 +81,5 @@ enum JobStatus {
   DONE
   FAILED
   PARTIAL
+  CANCELLED
 }

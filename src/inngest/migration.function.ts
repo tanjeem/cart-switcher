@@ -5,7 +5,7 @@ import { ShopifyUploader } from '@/uploaders/shopify'
 import { transformProduct, transformCustomer, transformOrder, transformCoupon, transformPost } from '@/transformers'
 import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, NormalizedCoupon, NormalizedPost, MigrationEntities } from '@/types'
 
-const UPLOAD_BATCH = 25      // items per upload step (~8-15s each, well under 60s)
+const UPLOAD_BATCH = 50      // items per upload step (~25s each, well under 300s)
 const WC_PAGES_PER_STEP = 10 // WC pages per fetch step (1000 items, ~10-20s)
 const WC_PAGE_SIZE = 100
 const CLEANUP_BATCH = 20      // IDs per delete step
@@ -185,13 +185,22 @@ export const migrationFunction = inngest.createFunction(
     const customers = (customerChunks as NormalizedCustomer[][]).flat()
     const existingOrders = new Set<string>(existingOrderIdsArr as string[])
 
-    // ── Phase 3: Upload in parallel across entity types ───────────────────────
-    // Batches are sequential within each entity type to respect Shopify's
-    // 2 req/s rate limit. Entity types upload in parallel with each other.
+    // ── Phase 3: Upload ───────────────────────────────────────────────────────
+    // Products, coupons, and posts upload in parallel (they're fast/few).
+    // Customers then orders upload SEQUENTIALLY to stay under Shopify's 2 req/s
+    // rate limit — running both simultaneously causes rate-limit collisions that
+    // add 2s retry delays per item, making parallel execution slower overall.
     const productBatches  = chunk(products  as NormalizedProduct[], UPLOAD_BATCH)
     const customerBatches = chunk(customers,                         UPLOAD_BATCH)
     const orderBatches    = chunk(orders,                            UPLOAD_BATCH)
 
+    // Helper: check if this job was cancelled between steps
+    const isCancelled = async () => {
+      const s = await db.migrationJob.findUnique({ where: { id: jobId }, select: { status: true } })
+      return s?.status === 'CANCELLED'
+    }
+
+    // Phase 3a: Products + coupons + posts in parallel (fast, small counts)
     await Promise.all([
 
       // ── Products ──
@@ -199,6 +208,7 @@ export const migrationFunction = inngest.createFunction(
         ? (async () => {
             for (let i = 0; i < productBatches.length; i++) {
               await step.run(`upload-products-${i}`, async () => {
+                if (await isCancelled()) return
                 let done = 0
                 let failed = 0
                 const failedLogs: { entityId: string; message: string }[] = []
@@ -225,67 +235,10 @@ export const migrationFunction = inngest.createFunction(
           })()
         : Promise.resolve(),
 
-      // ── Customers ──
-      entities.customers
-        ? (async () => {
-            for (let i = 0; i < customerBatches.length; i++) {
-              await step.run(`upload-customers-${i}`, async () => {
-                let done = 0
-                let failed = 0
-                const failedLogs: { entityId: string; message: string }[] = []
-                for (const customer of customerBatches[i]) {
-                  try {
-                    await shopify.createCustomer(transformCustomer(customer))
-                    done++
-                  } catch (err: unknown) {
-                    const msg = err instanceof Error ? err.message : String(err)
-                    failedLogs.push({ entityId: customer.sourceId, message: msg })
-                    failed++
-                  }
-                }
-                await Promise.all([
-                  db.migrationJob.update({ where: { id: jobId }, data: { doneCustomers: { increment: done }, failedCustomers: { increment: failed } } }),
-                  ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'customer', entityId: l.entityId, status: 'failed', message: l.message } })),
-                ])
-              })
-            }
-          })()
-        : Promise.resolve(),
-
-      // ── Orders ──
-      entities.orders
-        ? (async () => {
-            for (let i = 0; i < orderBatches.length; i++) {
-              await step.run(`upload-orders-${i}`, async () => {
-                let done = 0
-                let failed = 0
-                const failedLogs: { entityId: string; message: string }[] = []
-                for (const order of orderBatches[i]) {
-                  if (existingOrders.has(order.sourceId)) {
-                    done++
-                    continue
-                  }
-                  try {
-                    await shopify.createOrder(transformOrder(order))
-                    done++
-                  } catch (err: unknown) {
-                    const msg = err instanceof Error ? err.message : String(err)
-                    failedLogs.push({ entityId: order.sourceId, message: msg })
-                    failed++
-                  }
-                }
-                await Promise.all([
-                  db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: done }, failedOrders: { increment: failed } } }),
-                  ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'order', entityId: l.entityId, status: 'failed', message: l.message } })),
-                ])
-              })
-            }
-          })()
-        : Promise.resolve(),
-
       // ── Coupons ──
       entities.coupons
         ? step.run('upload-coupons', async () => {
+            if (await isCancelled()) return
             for (const coupon of coupons as NormalizedCoupon[]) {
               try {
                 await shopify.createDiscountCode(transformCoupon(coupon))
@@ -298,6 +251,7 @@ export const migrationFunction = inngest.createFunction(
       // ── Blog Posts ──
       entities.posts
         ? step.run('upload-posts', async () => {
+            if (await isCancelled()) return
             for (const post of posts as NormalizedPost[]) {
               try {
                 await shopify.createArticle(transformPost(post))
@@ -308,12 +262,68 @@ export const migrationFunction = inngest.createFunction(
         : Promise.resolve(),
     ])
 
+    // Phase 3b: Customers (sequential to stay under 2 req/s without collisions)
+    if (entities.customers) {
+      for (let i = 0; i < customerBatches.length; i++) {
+        await step.run(`upload-customers-${i}`, async () => {
+          if (await isCancelled()) return
+          let done = 0
+          let failed = 0
+          const failedLogs: { entityId: string; message: string }[] = []
+          for (const customer of customerBatches[i]) {
+            try {
+              await shopify.createCustomer(transformCustomer(customer))
+              done++
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err)
+              failedLogs.push({ entityId: customer.sourceId, message: msg })
+              failed++
+            }
+          }
+          await Promise.all([
+            db.migrationJob.update({ where: { id: jobId }, data: { doneCustomers: { increment: done }, failedCustomers: { increment: failed } } }),
+            ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'customer', entityId: l.entityId, status: 'failed', message: l.message } })),
+          ])
+        })
+      }
+    }
+
+    // Phase 3c: Orders (after customers to avoid combined rate-limit pressure)
+    if (entities.orders) {
+      for (let i = 0; i < orderBatches.length; i++) {
+        await step.run(`upload-orders-${i}`, async () => {
+          if (await isCancelled()) return
+          let done = 0
+          let failed = 0
+          const failedLogs: { entityId: string; message: string }[] = []
+          for (const order of orderBatches[i]) {
+            if (existingOrders.has(order.sourceId)) {
+              done++
+              continue
+            }
+            try {
+              await shopify.createOrder(transformOrder(order))
+              done++
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err)
+              failedLogs.push({ entityId: order.sourceId, message: msg })
+              failed++
+            }
+          }
+          await Promise.all([
+            db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: done }, failedOrders: { increment: failed } } }),
+            ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'order', entityId: l.entityId, status: 'failed', message: l.message } })),
+          ])
+        })
+      }
+    }
+
     // ── Complete ──────────────────────────────────────────────────────────────
     await step.run('complete', async () => {
-      const final = await db.migrationJob.findUnique({ where: { id: jobId } })
+      const final = await db.migrationJob.findUnique({ where: { id: jobId }, select: { status: true, failedProducts: true, failedOrders: true, failedCustomers: true } })
+      if (final?.status === 'CANCELLED') return // user stopped it — keep CANCELLED status
       const hasFailures =
         (final?.failedProducts ?? 0) + (final?.failedOrders ?? 0) + (final?.failedCustomers ?? 0) > 0
-
       await db.migrationJob.update({
         where: { id: jobId },
         data: { status: hasFailures ? 'PARTIAL' : 'DONE', completedAt: new Date() },

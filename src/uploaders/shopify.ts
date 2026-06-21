@@ -152,6 +152,49 @@ export class ShopifyUploader {
     await sleep(500)
   }
 
+  async deleteCustomer(id: number): Promise<void> {
+    await this.client.delete(`/customers/${id}.json`)
+    await sleep(500)
+  }
+
+  // ── Bulk ID scans (for management / delete-all) ───────────────────────────
+
+  async getAllProductIds(): Promise<number[]> {
+    const ids: number[] = []
+    let path = `/products.json?limit=250&fields=id`
+    while (path) {
+      const res = await this.client.get(path)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const p of (res.data.products ?? []) as any[]) ids.push(p.id)
+      path = this.parseNextPath(res.headers['link'] ?? '')
+    }
+    return ids
+  }
+
+  async getAllCustomerIds(): Promise<number[]> {
+    const ids: number[] = []
+    let path = `/customers.json?limit=250&fields=id`
+    while (path) {
+      const res = await this.client.get(path)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const c of (res.data.customers ?? []) as any[]) ids.push(c.id)
+      path = this.parseNextPath(res.headers['link'] ?? '')
+    }
+    return ids
+  }
+
+  async getAllOrderIds(): Promise<number[]> {
+    const ids: number[] = []
+    let path = `/orders.json?limit=250&status=any&fields=id`
+    while (path) {
+      const res = await this.client.get(path)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const o of (res.data.orders ?? []) as any[]) ids.push(o.id)
+      path = this.parseNextPath(res.headers['link'] ?? '')
+    }
+    return ids
+  }
+
   // ── Existing-order snapshot for skip-on-retry ─────────────────────────────
 
   async getExistingOrderSourceIds(): Promise<Set<string>> {

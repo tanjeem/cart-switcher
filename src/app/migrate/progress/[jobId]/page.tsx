@@ -16,12 +16,28 @@ const ALL_ON: MigrationEntities = {
   products: true, customers: true, orders: true, coupons: true, posts: true,
 }
 
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `~${Math.round(seconds)}s`
+  const mins = Math.round(seconds / 60)
+  return `~${mins} min`
+}
+
+function calcEta(done: number, total: number, startedAt?: string): string | null {
+  if (!startedAt || done === 0 || total === 0 || done >= total) return null
+  const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000
+  const rate = done / elapsed
+  if (rate <= 0) return null
+  const remaining = (total - done) / rate
+  return formatEta(remaining)
+}
+
 export default function ProgressPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const router = useRouter()
   const [progress, setProgress] = useState<MigrationProgress | null>(null)
   const [retrying, setRetrying] = useState(false)
   const [cleaning, setCleaning] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const [entities, setEntities] = useState<MigrationEntities>(ALL_ON)
 
   useEffect(() => {
@@ -29,7 +45,7 @@ export default function ProgressPage() {
     es.onmessage = (e) => {
       const data = JSON.parse(e.data) as MigrationProgress
       setProgress(data)
-      if (data.status === 'DONE' || data.status === 'FAILED' || data.status === 'PARTIAL') {
+      if (['DONE', 'FAILED', 'PARTIAL', 'CANCELLED'].includes(data.status)) {
         es.close()
       }
     }
@@ -40,7 +56,6 @@ export default function ProgressPage() {
   const toggleEntity = (key: keyof MigrationEntities) => {
     setEntities(prev => {
       const next = { ...prev, [key]: !prev[key] }
-      // Prevent deselecting all
       const anyOn = Object.values(next).some(Boolean)
       return anyOn ? next : prev
     })
@@ -77,14 +92,32 @@ export default function ProgressPage() {
     }
   }, [jobId, router, entities])
 
-  const isDone    = progress?.status === 'DONE'
-  const isPartial = progress?.status === 'PARTIAL'
-  const isFailed  = progress?.status === 'FAILED'
-  const isRunning = progress?.status === 'RUNNING' || progress?.status === 'PENDING'
-  const canRetry  = isPartial || isFailed || isRunning
+  const handleStop = useCallback(async () => {
+    if (!confirm('Stop the migration? Items migrated so far will remain in Shopify. You can retry later.')) return
+    setStopping(true)
+    try {
+      await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' })
+    } catch {
+      // status update will reflect in SSE
+    }
+  }, [jobId])
 
-  // A row is "active" if its total > 0, or it hasn't been zeroed yet (null/0 before first update)
+  const isDone      = progress?.status === 'DONE'
+  const isPartial   = progress?.status === 'PARTIAL'
+  const isFailed    = progress?.status === 'FAILED'
+  const isCancelled = progress?.status === 'CANCELLED'
+  const isRunning   = progress?.status === 'RUNNING' || progress?.status === 'PENDING'
+  const canRetry    = isPartial || isFailed || isRunning || isCancelled
+
   const rowVisible = (total: number, done: number) => total > 0 || done > 0
+
+  // ETA for the overall migration: use the slowest-running entity
+  const customerEta = progress ? calcEta(progress.doneCustomers, progress.totalCustomers, progress.startedAt) : null
+  const orderEta    = progress ? calcEta(progress.doneOrders, progress.totalOrders, progress.startedAt) : null
+
+  // Since orders run after customers, show order ETA only when customers are done
+  const customersDone = progress ? (progress.totalCustomers === 0 || progress.doneCustomers >= progress.totalCustomers) : false
+  const activeEta = customersDone ? orderEta : customerEta
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4 py-12">
@@ -95,10 +128,13 @@ export default function ProgressPage() {
           <p className="text-gray-500 text-sm">Keep this tab open — your store is being migrated</p>
         </div>
 
-        {/* Status badge */}
+        {/* Status badge + ETA */}
         {progress && (
-          <div className="flex justify-center mb-6">
+          <div className="flex justify-center items-center gap-3 mb-6">
             <StatusBadge status={progress.status} />
+            {isRunning && activeEta && (
+              <span className="text-xs text-gray-400">{activeEta} remaining</span>
+            )}
           </div>
         )}
 
@@ -127,6 +163,28 @@ export default function ProgressPage() {
             </>
           )}
         </div>
+
+        {/* Stop button — shown while running */}
+        {isRunning && (
+          <div className="mt-3 flex justify-center">
+            <button
+              onClick={handleStop}
+              disabled={stopping}
+              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 border border-gray-200 hover:border-red-300 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <span>⏹</span>
+              {stopping ? 'Stopping...' : 'Stop migration'}
+            </button>
+          </div>
+        )}
+
+        {/* Cancelled state */}
+        {isCancelled && (
+          <div className="mt-4 bg-gray-50 border border-gray-200 rounded-xl p-4 text-center">
+            <p className="text-sm font-medium text-gray-700">Migration stopped</p>
+            <p className="text-xs text-gray-500 mt-1">Items migrated so far remain in your Shopify store.</p>
+          </div>
+        )}
 
         {/* Live error log */}
         {progress?.recentErrors && progress.recentErrors.length > 0 && (
@@ -170,9 +228,7 @@ export default function ProgressPage() {
                     >
                       <span>{icon}</span>
                       {label}
-                      {on && (
-                        <span className="ml-0.5 text-xs opacity-60">✓</span>
-                      )}
+                      {on && <span className="ml-0.5 text-xs opacity-60">✓</span>}
                     </button>
                   )
                 })}
@@ -183,7 +239,7 @@ export default function ProgressPage() {
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-medium text-amber-900">
-                  {isRunning ? 'Migration stuck or taking too long?' : 'Some items failed to migrate.'}
+                  {isRunning ? 'Migration stuck or taking too long?' : isCancelled ? 'Resume migration?' : 'Some items failed to migrate.'}
                 </p>
                 <p className="text-xs text-amber-700 mt-0.5">
                   Continues where it left off — already-migrated orders are skipped.
@@ -194,7 +250,7 @@ export default function ProgressPage() {
                 disabled={retrying || cleaning}
                 className="shrink-0 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
               >
-                {retrying ? 'Starting...' : 'Retry'}
+                {retrying ? 'Starting...' : isCancelled ? 'Resume' : 'Retry'}
               </button>
             </div>
 
@@ -217,14 +273,20 @@ export default function ProgressPage() {
           </div>
         )}
 
-        {/* Tools link — always visible once migration has started */}
+        {/* Tool links */}
         {progress && (
-          <div className="mt-4 text-center">
+          <div className="mt-4 text-center space-y-2">
             <a
               href={`/migrate/dedup/${jobId}`}
-              className="text-sm text-gray-500 hover:text-gray-800 underline underline-offset-2"
+              className="block text-sm text-gray-500 hover:text-gray-800 underline underline-offset-2"
             >
               Remove duplicate products
+            </a>
+            <a
+              href={`/migrate/manage/${jobId}`}
+              className="block text-sm text-gray-500 hover:text-gray-800 underline underline-offset-2"
+            >
+              Delete products / customers / orders from Shopify
             </a>
           </div>
         )}
@@ -278,11 +340,12 @@ function ProgressRow({
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; cls: string }> = {
-    PENDING:  { label: 'Queued',    cls: 'bg-gray-100 text-gray-600' },
-    RUNNING:  { label: 'Running',   cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
-    DONE:     { label: 'Complete',  cls: 'bg-green-50 text-green-700 border border-green-200' },
-    PARTIAL:  { label: 'Partial',   cls: 'bg-yellow-50 text-yellow-700 border border-yellow-200' },
-    FAILED:   { label: 'Failed',    cls: 'bg-red-50 text-red-700 border border-red-200' },
+    PENDING:   { label: 'Queued',    cls: 'bg-gray-100 text-gray-600' },
+    RUNNING:   { label: 'Running',   cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
+    DONE:      { label: 'Complete',  cls: 'bg-green-50 text-green-700 border border-green-200' },
+    PARTIAL:   { label: 'Partial',   cls: 'bg-yellow-50 text-yellow-700 border border-yellow-200' },
+    FAILED:    { label: 'Failed',    cls: 'bg-red-50 text-red-700 border border-red-200' },
+    CANCELLED: { label: 'Stopped',   cls: 'bg-gray-100 text-gray-600 border border-gray-200' },
   }
   const { label, cls } = map[status] ?? map.PENDING
   return (

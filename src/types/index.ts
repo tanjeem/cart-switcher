@@ -157,7 +157,8 @@ export const ALL_ENTITIES: MigrationEntities = {
 
 export interface MigrationProgress {
   jobId: string
-  status: string
+  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED' | 'PARTIAL' | 'CANCELLED'
+  startedAt?: string
   totalProducts: number
   totalOrders: number
   totalCustomers: number
