@@ -3,8 +3,10 @@ import type { ShopifyCredentials } from '@/types'
 
 const SHOPIFY_API_VERSION = '2024-10'
 
-// Shopify REST Admin API: 2 requests/second leaky bucket (40 burst)
-// We sleep 500ms between writes to stay safely under the limit
+// Set to false to fall back to REST if GraphQL mutations have issues.
+// REST: 2 req/s hard limit. GraphQL: ~5 mutations/s (cost-based throttle).
+const USE_GRAPHQL = true
+
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export class ShopifyUploader {
@@ -247,26 +249,165 @@ export class ShopifyUploader {
     await sleep(500)
   }
 
+  // ── GraphQL helper ────────────────────────────────────────────────────────
+  // Sends a GraphQL mutation and applies adaptive throttling based on the
+  // cost extensions Shopify returns. Much more efficient than a fixed sleep.
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async gql(query: string, variables: Record<string, unknown> = {}): Promise<any> {
+    const res = await this.client.post('/graphql.json', { query, variables })
+
+    if (res.data.errors?.length) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      throw new Error(`GraphQL: ${res.data.errors.map((e: any) => e.message).join('; ')}`)
+    }
+
+    // Adaptive throttle: wait proportionally when bucket is running low
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const throttle = res.data.extensions?.cost?.throttleStatus as any
+    const cost = (res.data.extensions?.cost?.actualQueryCost ?? 10) as number
+    if (throttle && throttle.currentlyAvailable < cost * 2) {
+      const deficit = cost * 2 - throttle.currentlyAvailable
+      const waitMs = Math.ceil((deficit / throttle.restoreRate) * 1000)
+      await sleep(Math.min(waitMs, 5000))
+    }
+
+    return res.data.data
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private restAddrToGql(a: any) {
+    if (!a) return null
+    return {
+      firstName: a.first_name ?? '',
+      lastName: a.last_name ?? '',
+      address1: a.address1 ?? '',
+      address2: a.address2 || null,
+      city: a.city ?? '',
+      province: a.province || null,
+      zip: a.zip ?? '',
+      country: a.country ?? '',
+      phone: a.phone || null,
+    }
+  }
+
+  // ── createCustomer ────────────────────────────────────────────────────────
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createCustomer(payload: any): Promise<void> {
+    return USE_GRAPHQL ? this.createCustomerGql(payload) : this.createCustomerRest(payload)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async createCustomerGql(payload: any): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const buildInput = (data: any, withPhone = true) => ({
+      firstName: data.first_name ?? '',
+      lastName: data.last_name ?? '',
+      email: data.email,
+      phone: withPhone ? (data.phone || null) : null,
+      acceptsMarketing: data.accepts_marketing ?? false,
+      note: data.note || null,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      addresses: data.addresses?.map((a: any) => ({
+        firstName: a.first_name ?? '',
+        lastName: a.last_name ?? '',
+        address1: a.address1 ?? '',
+        address2: a.address2 || null,
+        city: a.city ?? '',
+        province: a.province || null,
+        zip: a.zip ?? '',
+        country: a.country ?? '',
+        phone: withPhone ? (a.phone || null) : null,
+      })) ?? [],
+    })
+
+    const CREATE = `
+      mutation customerCreate($input: CustomerInput!) {
+        customerCreate(input: $input) {
+          customer { id }
+          userErrors { field message }
+        }
+      }`
+
+    const tryGqlCreate = async (input: Record<string, unknown>) => {
+      const data = await this.gql(CREATE, { input })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const errors: { field: string[]; message: string }[] = data.customerCreate.userErrors
+
+      if (!errors.length) return
+
+      const phoneBad = errors.some(e =>
+        e.field?.some(f => f.includes('phone')) || e.message?.toLowerCase().includes('phone')
+      )
+      const emailTaken = !phoneBad && errors.some(e => e.message?.includes('already been taken'))
+
+      if (phoneBad) {
+        // Retry without phone
+        const retryData = await this.gql(CREATE, { input: { ...input, phone: null, addresses: (input.addresses as [])?.map((a: Record<string, unknown>) => ({ ...a, phone: null })) } })
+        const retryErrors = retryData.customerCreate.userErrors
+        if (retryErrors.length && !retryErrors.every((e: { message: string }) => e.message?.includes('already been taken'))) {
+          throw new Error(retryErrors.map((e: { message: string }) => e.message).join('; '))
+        }
+        if (retryErrors.some((e: { message: string }) => e.message?.includes('already been taken'))) {
+          await this.upsertCustomerGql(payload.email, { ...input, phone: null })
+        }
+      } else if (emailTaken) {
+        await this.upsertCustomerGql(payload.email, input)
+      } else {
+        throw new Error(errors.map(e => e.message).join('; '))
+      }
+    }
+
+    await tryGqlCreate(buildInput(payload))
+  }
+
+  private async upsertCustomerGql(email: string, input: Record<string, unknown>): Promise<void> {
+    // Look up existing customer ID via REST search (cheaper than GQL query)
+    const search = await this.client.get('/customers/search.json', {
+      params: { query: `email:${email}`, limit: 1 },
+    })
+    const existing = search.data.customers?.[0]
+    if (!existing) return
+
+    const gid = `gid://shopify/Customer/${existing.id}`
+    const UPDATE = `
+      mutation customerUpdate($input: CustomerInput!) {
+        customerUpdate(input: $input) {
+          customer { id }
+          userErrors { field message }
+        }
+      }`
+    const data = await this.gql(UPDATE, { input: { ...input, id: gid } })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const errors: { message: string }[] = data.customerUpdate.userErrors
+    if (errors.length) {
+      // If phone still bad on update, retry without it
+      const phoneBad = errors.some(e => e.message?.toLowerCase().includes('phone'))
+      if (phoneBad) {
+        await this.gql(UPDATE, { input: { ...input, id: gid, phone: null } })
+      } else {
+        throw new Error(errors.map(e => e.message).join('; '))
+      }
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async createCustomerRest(payload: any): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tryCreate = async (data: any) => {
       try {
         await this.client.post('/customers.json', { customer: data })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
         const emailTaken = msg.includes('already been taken') && !msg.includes('phone')
-        const phoneTaken = msg.includes('phone') && msg.includes('already been taken')
-        const phoneInvalid = msg.includes('phone') && msg.includes('is invalid')
+        const phoneBad = msg.includes('phone') && (msg.includes('already been taken') || msg.includes('is invalid'))
 
-        if (phoneTaken || phoneInvalid) {
-          // Retry without phone — a different customer already has this number
-          const { phone: _phone, ...rest } = data
-          void _phone // suppress unused var warning
+        if (phoneBad) {
+          const { phone: _p, ...rest } = data; void _p
           await this.client.post('/customers.json', { customer: rest })
         } else if (emailTaken && data.email) {
-          const search = await this.client.get('/customers/search.json', {
-            params: { query: `email:${data.email}`, limit: 1 },
-          })
+          const search = await this.client.get('/customers/search.json', { params: { query: `email:${data.email}`, limit: 1 } })
           const existing = search.data.customers?.[0]
           if (existing) {
             try {
@@ -274,31 +415,93 @@ export class ShopifyUploader {
             } catch (putErr: unknown) {
               const putMsg = putErr instanceof Error ? putErr.message : String(putErr)
               if (putMsg.includes('phone') && (putMsg.includes('already been taken') || putMsg.includes('is invalid'))) {
-                const { phone: _phone, ...rest } = data
-                void _phone
+                const { phone: _p, ...rest } = data; void _p
                 await this.client.put(`/customers/${existing.id}.json`, { customer: rest })
-              } else {
-                throw putErr
-              }
+              } else throw putErr
             }
           }
-        } else {
-          throw err
-        }
+        } else throw err
       }
     }
-
     await tryCreate(payload)
-    await sleep(300)
+    await sleep(500)
   }
+
+  // ── createOrder ───────────────────────────────────────────────────────────
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createOrder(payload: any): Promise<void> {
+    return USE_GRAPHQL ? this.createOrderGql(payload) : this.createOrderRest(payload)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async createOrderGql(payload: any): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const buildOrder = (p: any, withPhone = true) => ({
+      email: p.email,
+      phone: withPhone ? (p.phone || null) : null,
+      financialStatus: (p.financial_status ?? 'pending').toUpperCase(),
+      ...(p.fulfillment_status ? { fulfillmentStatus: p.fulfillment_status.toUpperCase() } : {}),
+      currencyCode: p.currency ?? 'USD',
+      note: p.note || null,
+      processedAt: p.processed_at ?? p.created_at,
+      tags: p.tags
+        ? (typeof p.tags === 'string' ? p.tags.split(',').map((t: string) => t.trim()).filter(Boolean) : p.tags)
+        : [],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      lineItems: (p.line_items ?? []).map((li: any) => ({
+        title: li.title,
+        ...(li.variant_title ? { variantTitle: li.variant_title } : {}),
+        ...(li.sku ? { sku: li.sku } : {}),
+        quantity: li.quantity ?? 1,
+        priceSet: { shopMoney: { amount: String(li.price ?? '0.00'), currencyCode: p.currency ?? 'USD' } },
+        taxable: li.taxable ?? true,
+        requiresShipping: li.requires_shipping ?? true,
+      })),
+      shippingAddress: withPhone ? this.restAddrToGql(p.shipping_address) : this.restAddrToGql({ ...p.shipping_address, phone: null }),
+      billingAddress: withPhone ? this.restAddrToGql(p.billing_address) : this.restAddrToGql({ ...p.billing_address, phone: null }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      noteAttributes: (p.note_attributes ?? []).map((a: any) => ({ name: a.name, value: String(a.value) })),
+      customer: p.email ? { email: p.email } : undefined,
+    })
+
+    const MUTATION = `
+      mutation orderCreate($order: OrderCreateOrderInput!, $options: OrderCreateOptionsInput) {
+        orderCreate(order: $order, options: $options) {
+          order { id }
+          userErrors { field message }
+        }
+      }`
+
+    const options = { inventoryBehaviour: 'BYPASS', sendReceipt: false, sendFulfillmentReceipt: false }
+
+    const tryCreate = async (order: Record<string, unknown>) => {
+      const data = await this.gql(MUTATION, { order, options })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const errors: { field: string[]; message: string }[] = data.orderCreate.userErrors
+      if (!errors.length) return
+
+      const phoneBad = errors.some(e =>
+        e.field?.some(f => f.toLowerCase().includes('phone')) || e.message?.toLowerCase().includes('phone')
+      )
+      if (phoneBad) {
+        const retryData = await this.gql(MUTATION, { order: buildOrder(payload, false), options })
+        const retryErrors = retryData.orderCreate.userErrors
+        if (retryErrors.length) throw new Error(retryErrors.map((e: { message: string }) => e.message).join('; '))
+      } else {
+        throw new Error(errors.map(e => `${e.field?.join('.')}: ${e.message}`).join('; '))
+      }
+    }
+
+    await tryCreate(buildOrder(payload))
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async createOrderRest(payload: any): Promise<void> {
     try {
       await this.client.post('/orders.json', { order: payload })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      // If phone is invalid, retry without it
       if (msg.includes('phone') && (msg.includes('is invalid') || msg.includes('already been taken'))) {
         const cleanedBilling = payload.billing_address ? { ...payload.billing_address, phone: null } : payload.billing_address
         const cleanedShipping = payload.shipping_address ? { ...payload.shipping_address, phone: null } : payload.shipping_address
@@ -309,7 +512,7 @@ export class ShopifyUploader {
         throw err
       }
     }
-    await sleep(300)
+    await sleep(500)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

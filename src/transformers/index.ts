@@ -105,8 +105,9 @@ export function transformOrder(o: NormalizedOrder) {
     // Include name from billing so the order shows a name, not just the email
     customer: {
       email: o.email,
-      first_name: o.billingAddress?.firstName ?? o.shippingAddress?.firstName ?? '',
-      last_name: o.billingAddress?.lastName ?? o.shippingAddress?.lastName ?? '',
+      first_name: o.billingAddress?.firstName || o.shippingAddress?.firstName || '',
+      // Shopify 422s when last_name is blank — fall back to '.' rather than fail
+      last_name: (o.billingAddress?.lastName || o.shippingAddress?.lastName)?.trim() || '.',
     },
     note: o.note ?? null,
     financial_status: o.financialStatus,
