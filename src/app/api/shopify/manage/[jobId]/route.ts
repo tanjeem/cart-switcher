@@ -2,7 +2,14 @@ import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { ShopifyUploader } from '@/uploaders/shopify'
 
-async function getShopify(jobId: string) {
+async function resolveShopify(
+  jobId: string,
+  overrideDomain?: string,
+  overrideToken?: string,
+): Promise<ShopifyUploader | null> {
+  if (overrideDomain && overrideToken) {
+    return new ShopifyUploader({ domain: overrideDomain, accessToken: overrideToken })
+  }
   const job = await db.migrationJob.findUnique({
     where: { id: jobId },
     select: { shopifyDomain: true, shopifyAccessToken: true },
@@ -12,7 +19,7 @@ async function getShopify(jobId: string) {
 }
 
 // GET /api/shopify/manage/[jobId]?entity=products|customers|orders
-// Returns: { count, ids }
+// Optional query params: domain, token (override stored credentials)
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ jobId: string }> }
@@ -24,7 +31,11 @@ export async function GET(
     return NextResponse.json({ error: 'entity must be products, customers, or orders' }, { status: 400 })
   }
 
-  const shopify = await getShopify(jobId)
+  const shopify = await resolveShopify(
+    jobId,
+    searchParams.get('domain') ?? undefined,
+    searchParams.get('token') ?? undefined,
+  )
   if (!shopify) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
 
   try {
@@ -40,24 +51,24 @@ export async function GET(
 }
 
 // DELETE /api/shopify/manage/[jobId]
-// Body: { entity: 'products'|'customers'|'orders', ids: number[] }
-// Deletes the given IDs. Returns { deleted, failed }
+// Body: { entity, ids, domain?, token? }
 export async function DELETE(
   req: Request,
   { params }: { params: Promise<{ jobId: string }> }
 ) {
   const { jobId } = await params
-  const shopify = await getShopify(jobId)
-  if (!shopify) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
-
-  const { entity, ids } = (await req.json()) as { entity: string; ids: number[] }
+  const { entity, ids, domain, token } = (await req.json()) as {
+    entity: string; ids: number[]; domain?: string; token?: string
+  }
   if (!entity || !Array.isArray(ids)) {
     return NextResponse.json({ error: 'entity and ids required' }, { status: 400 })
   }
 
+  const shopify = await resolveShopify(jobId, domain, token)
+  if (!shopify) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
+
   let deleted = 0
   let failed = 0
-
   for (const id of ids) {
     try {
       if (entity === 'products') await shopify.deleteProduct(id)
@@ -68,6 +79,5 @@ export async function DELETE(
       failed++
     }
   }
-
   return NextResponse.json({ deleted, failed })
 }

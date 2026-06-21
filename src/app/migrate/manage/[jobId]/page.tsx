@@ -16,6 +16,8 @@ interface EntityState {
   error: string | null
 }
 
+interface Creds { domain: string; token: string }
+
 const ENTITY_META: { key: Entity; label: string; icon: string; warning: string }[] = [
   {
     key: 'products',
@@ -39,23 +41,43 @@ const ENTITY_META: { key: Entity; label: string; icon: string; warning: string }
 
 const BATCH_SIZE = 25
 
+const initState = (): EntityState => ({
+  count: null, ids: [], loading: false, deleting: false,
+  deleted: 0, total: 0, confirming: false, error: null,
+})
+
 export default function ManagePage() {
   const { jobId } = useParams<{ jobId: string }>()
   const [state, setState] = useState<Record<Entity, EntityState>>({
-    products: { count: null, ids: [], loading: false, deleting: false, deleted: 0, total: 0, confirming: false, error: null },
-    customers: { count: null, ids: [], loading: false, deleting: false, deleted: 0, total: 0, confirming: false, error: null },
-    orders: { count: null, ids: [], loading: false, deleting: false, deleted: 0, total: 0, confirming: false, error: null },
+    products: initState(),
+    customers: initState(),
+    orders: initState(),
   })
+  // Override credentials (shown when 401 occurs)
+  const [creds, setCreds] = useState<Creds>({ domain: '', token: '' })
+  const [showCredsForm, setShowCredsForm] = useState(false)
+  const [savedCreds, setSavedCreds] = useState<Creds | null>(null)
 
   const patch = (entity: Entity, update: Partial<EntityState>) =>
     setState(prev => ({ ...prev, [entity]: { ...prev[entity], ...update } }))
 
+  const credParams = (c: Creds | null) =>
+    c ? `&domain=${encodeURIComponent(c.domain)}&token=${encodeURIComponent(c.token)}` : ''
+
+  const credBody = (c: Creds | null) =>
+    c ? { domain: c.domain, token: c.token } : {}
+
+  const is401 = (msg: string) => msg.includes('401') || msg.includes('Invalid API key') || msg.includes('access token')
+
   const fetchCount = async (entity: Entity) => {
     patch(entity, { loading: true, error: null })
     try {
-      const res = await fetch(`/api/shopify/manage/${jobId}?entity=${entity}`)
+      const res = await fetch(`/api/shopify/manage/${jobId}?entity=${entity}${credParams(savedCreds)}`)
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Failed to fetch')
+      if (!res.ok) {
+        if (is401(data.error ?? '')) setShowCredsForm(true)
+        throw new Error(data.error ?? 'Failed to fetch')
+      }
       patch(entity, { count: data.count, ids: data.ids, loading: false })
     } catch (err) {
       patch(entity, { loading: false, error: String(err) })
@@ -74,7 +96,7 @@ export default function ManagePage() {
         const res = await fetch(`/api/shopify/manage/${jobId}`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entity, ids: batch }),
+          body: JSON.stringify({ entity, ids: batch, ...credBody(savedCreds) }),
         })
         const data = await res.json()
         deleted += data.deleted ?? batch.length
@@ -87,6 +109,14 @@ export default function ManagePage() {
     patch(entity, { deleting: false, count: 0, ids: [], deleted: 0, total: 0 })
   }
 
+  const saveCreds = () => {
+    if (!creds.domain.trim() || !creds.token.trim()) return
+    setSavedCreds({ domain: creds.domain.trim(), token: creds.token.trim() })
+    setShowCredsForm(false)
+    // Reset all entity states so user can re-fetch with new creds
+    setState({ products: initState(), customers: initState(), orders: initState() })
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center px-4 py-12">
       <div className="w-full max-w-lg">
@@ -96,12 +126,72 @@ export default function ManagePage() {
           <p className="text-gray-500 text-sm">Delete products, customers, or orders from your Shopify store</p>
         </div>
 
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
-          <p className="text-sm text-amber-800 font-medium">Warning: permanent deletion</p>
-          <p className="text-xs text-amber-700 mt-1">
-            Deletions here affect your live Shopify store and cannot be undone. Make sure you want to delete before proceeding.
-          </p>
-        </div>
+        {/* Credentials form — shown on 401 or manual toggle */}
+        {showCredsForm ? (
+          <div className="bg-white rounded-2xl border shadow-sm p-5 mb-6">
+            <p className="text-sm font-semibold text-gray-800 mb-1">Enter Shopify credentials</p>
+            <p className="text-xs text-gray-500 mb-4">
+              The stored credentials aren&apos;t working. Enter your Shopify store domain and Admin API access token.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Store domain</label>
+                <input
+                  type="text"
+                  placeholder="your-store.myshopify.com"
+                  value={creds.domain}
+                  onChange={e => setCreds(p => ({ ...p, domain: e.target.value }))}
+                  className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Admin API access token</label>
+                <input
+                  type="password"
+                  placeholder="shpat_..."
+                  value={creds.token}
+                  onChange={e => setCreds(p => ({ ...p, token: e.target.value }))}
+                  className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button
+                  onClick={() => setShowCredsForm(false)}
+                  className="flex-1 border text-gray-700 text-sm font-medium px-3 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveCreds}
+                  disabled={!creds.domain.trim() || !creds.token.trim()}
+                  className="flex-1 bg-black text-white text-sm font-medium px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors disabled:opacity-50"
+                >
+                  Save & continue
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between mb-4">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex-1 mr-3">
+              <p className="text-xs text-amber-800">
+                <strong>Warning:</strong> deletions here are permanent and affect your live Shopify store.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowCredsForm(true)}
+              className="text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2 whitespace-nowrap"
+            >
+              {savedCreds ? 'Change credentials' : 'Wrong credentials?'}
+            </button>
+          </div>
+        )}
+
+        {savedCreds && !showCredsForm && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mb-4 text-xs text-blue-800">
+            Using manually entered credentials for <strong>{savedCreds.domain}</strong>
+          </div>
+        )}
 
         <div className="space-y-4">
           {ENTITY_META.map(({ key, label, icon, warning }) => {
@@ -143,7 +233,6 @@ export default function ManagePage() {
                   <p className="text-xs text-red-600 mb-3">{s.error}</p>
                 )}
 
-                {/* Delete progress bar */}
                 {s.deleting && (
                   <div className="mb-3">
                     <div className="flex justify-between text-xs text-gray-500 mb-1">
@@ -159,7 +248,6 @@ export default function ManagePage() {
                   </div>
                 )}
 
-                {/* Delete button / confirm flow */}
                 {s.count !== null && s.count > 0 && !s.deleting && (
                   <>
                     {!s.confirming ? (
