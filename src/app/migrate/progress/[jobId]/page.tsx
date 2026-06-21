@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import type { MigrationProgress, MigrationEntities } from '@/types'
 
@@ -22,15 +22,21 @@ function formatEta(seconds: number): string {
   return `~${mins} min`
 }
 
-// Rolling window of recent progress samples — used to calculate ETA from
-// actual recent throughput instead of startedAt (which includes pre-upload phases).
+function formatStaleness(secs: number): string {
+  if (secs < 5) return 'just now'
+  if (secs < 60) return `${secs}s ago`
+  const mins = Math.floor(secs / 60)
+  const rem = secs % 60
+  return rem > 0 ? `${mins}m ${rem}s ago` : `${mins}m ago`
+}
+
 interface ProgressSample {
   time: number
   customers: number
   orders: number
 }
 
-const SAMPLE_WINDOW = 20 // keep last 20 samples (~30s at 1.5s polling)
+const SAMPLE_WINDOW = 20
 
 function rollingEta(
   done: number,
@@ -50,6 +56,21 @@ function rollingEta(
   return formatEta(remaining)
 }
 
+function rollingSpeed(
+  field: 'customers' | 'orders',
+  samples: ProgressSample[],
+): string | null {
+  if (samples.length < 2) return null
+  const oldest = samples[0]
+  const newest = samples.at(-1)
+  if (!oldest || !newest) return null
+  const elapsed = (newest.time - oldest.time) / 1000
+  const delta = newest[field] - oldest[field]
+  if (delta <= 0 || elapsed <= 0) return null
+  const perMin = (delta / elapsed) * 60
+  return `${Math.round(perMin)}/min`
+}
+
 export default function ProgressPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const router = useRouter()
@@ -58,6 +79,9 @@ export default function ProgressPage() {
   const [retrying, setRetrying] = useState(false)
   const [cleaning, setCleaning] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [connected, setConnected] = useState(false)
+  const [staleSecs, setStaleSecs] = useState(0)
+  const lastUpdateRef = useRef<number | null>(null)
   const [entities, setEntities] = useState<MigrationEntities>(() => {
     if (globalThis.window === undefined) return ALL_ON
     try {
@@ -71,15 +95,27 @@ export default function ProgressPage() {
     return ALL_ON
   })
 
+  // Tick every second to keep "updated X ago" live
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (lastUpdateRef.current !== null) {
+        setStaleSecs(Math.floor((Date.now() - lastUpdateRef.current) / 1000))
+      }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
+
   useEffect(() => {
     let es: EventSource
     let done = false
     let retryTimer: ReturnType<typeof setTimeout> | null = null
 
-    // Extracted to avoid nesting beyond 4 levels (linter S2004)
     const handleMessage = (e: MessageEvent) => {
       const data = JSON.parse(e.data) as MigrationProgress
       setProgress(data)
+      lastUpdateRef.current = Date.now()
+      setStaleSecs(0)
+      setConnected(true)
       if (data.status === 'RUNNING') {
         setSamples(prev => [
           ...prev.slice(-(SAMPLE_WINDOW - 1)),
@@ -96,9 +132,9 @@ export default function ProgressPage() {
       es = new EventSource(`/api/progress/${jobId}`)
       es.onmessage = handleMessage
       es.onerror = () => {
+        setConnected(false)
         es.close()
         if (!done) {
-          // SSE timed out (Vercel 300s limit) — reconnect after 2s
           retryTimer = setTimeout(connect, 2000)
         }
       }
@@ -158,9 +194,7 @@ export default function ProgressPage() {
     setStopping(true)
     try {
       await fetch(`/api/jobs/${jobId}/cancel`, { method: 'POST' })
-    } catch {
-      // status update will reflect in SSE
-    }
+    } catch {}
   }, [jobId])
 
   const isDone      = progress?.status === 'DONE'
@@ -172,6 +206,10 @@ export default function ProgressPage() {
 
   const rowVisible = (total: number, done: number) => total > 0 || done > 0
 
+  // Staleness thresholds — only meaningful while running
+  const isStale     = isRunning && staleSecs >= 45
+  const isVeryStale = isRunning && staleSecs >= 120
+
   let retryHeading = 'Some items failed to migrate.'
   if (isRunning) retryHeading = 'Migration stuck or taking too long?'
   else if (isCancelled) retryHeading = 'Resume migration?'
@@ -180,15 +218,22 @@ export default function ProgressPage() {
   if (retrying) retryLabel = 'Starting...'
   else if (isCancelled) retryLabel = 'Resume'
 
-  // ETA based on recent throughput (rolling window), not startedAt.
-  // startedAt includes pre-upload phases and gives wildly wrong estimates.
   const customersDone = !progress?.totalCustomers || progress.doneCustomers >= progress.totalCustomers
+  const activeField: 'customers' | 'orders' = customersDone ? 'orders' : 'customers'
+  const activeDone  = activeField === 'orders' ? (progress?.doneOrders ?? 0)    : (progress?.doneCustomers ?? 0)
+  const activeTotal = activeField === 'orders' ? (progress?.totalOrders ?? 0)   : (progress?.totalCustomers ?? 0)
+
   let activeEta: string | null = null
-  if (progress) {
-    activeEta = customersDone
-      ? rollingEta(progress.doneOrders, progress.totalOrders, 'orders', samples)
-      : rollingEta(progress.doneCustomers, progress.totalCustomers, 'customers', samples)
+  let activeSpeed: string | null = null
+  if (progress && isRunning) {
+    activeEta   = rollingEta(activeDone, activeTotal, activeField, samples)
+    activeSpeed = rollingSpeed(activeField, samples)
   }
+
+  // Combined progress across products + customers + orders for the header bar
+  const totalAll = (progress?.totalProducts ?? 0) + (progress?.totalCustomers ?? 0) + (progress?.totalOrders ?? 0)
+  const doneAll  = (progress?.doneProducts ?? 0)  + (progress?.doneCustomers ?? 0)  + (progress?.doneOrders ?? 0)
+  const overallPct = totalAll > 0 ? Math.round((doneAll / totalAll) * 100) : 0
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4 py-12">
@@ -199,19 +244,75 @@ export default function ProgressPage() {
           <p className="text-gray-500 text-sm">Keep this tab open — your store is being migrated</p>
         </div>
 
-        {/* Status badge + ETA */}
+        {/* Status + live indicators */}
         {progress && (
-          <div className="flex justify-center items-center gap-3 mb-6">
-            <StatusBadge status={progress.status} />
-            {isRunning && activeEta && (
-              <span className="text-xs text-gray-400">{activeEta} remaining</span>
+          <div className="flex flex-col items-center gap-2 mb-5">
+            <div className="flex items-center gap-2">
+              <StatusBadge status={progress.status} pulsing={isRunning} />
+              {isRunning && <ConnectionDot connected={connected} />}
+            </div>
+
+            {/* ETA + speed */}
+            {isRunning && (activeEta || activeSpeed) && (
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                {activeEta && <span>{activeEta} remaining</span>}
+                {activeEta && activeSpeed && <span className="text-gray-300">•</span>}
+                {activeSpeed && <span>{activeSpeed}</span>}
+              </div>
+            )}
+
+            {/* Last update counter */}
+            {isRunning && lastUpdateRef.current !== null && (
+              <span className={`text-xs ${isVeryStale ? 'text-red-500 font-medium' : isStale ? 'text-amber-600' : 'text-gray-400'}`}>
+                Updated {formatStaleness(staleSecs)}
+              </span>
             )}
           </div>
         )}
 
+        {/* Stale / stuck warnings */}
+        {isVeryStale && (
+          <div className="mb-4 bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start gap-3">
+            <span className="text-red-500 mt-0.5 shrink-0">⚠</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-red-800">No progress in {Math.floor(staleSecs / 60)}m — migration may be stuck</p>
+              <p className="text-xs text-red-600 mt-0.5">Stop the migration and retry orders only to resume from where it left off.</p>
+            </div>
+          </div>
+        )}
+        {isStale && !isVeryStale && (
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
+            <span className="text-amber-500 mt-0.5 shrink-0">⏳</span>
+            <div>
+              <p className="text-sm font-medium text-amber-900">No new progress in {staleSecs}s</p>
+              <p className="text-xs text-amber-700 mt-0.5">A step is being retried automatically — this is normal. Please wait.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Overall progress bar */}
+        {totalAll > 0 && (
+          <div className="mb-4">
+            <div className="flex justify-between text-xs text-gray-500 mb-1.5">
+              <span>Overall progress</span>
+              <span className="font-medium">{overallPct}%</span>
+            </div>
+            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-black rounded-full transition-all duration-700"
+                style={{ width: `${overallPct}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Per-entity rows */}
         <div className="bg-white rounded-2xl border p-6 shadow-sm space-y-5">
           {!progress && (
-            <div className="text-center text-gray-400 py-8 text-sm">Starting migration...</div>
+            <div className="flex flex-col items-center gap-3 py-8">
+              <div className="w-5 h-5 border-2 border-gray-300 border-t-black rounded-full animate-spin" />
+              <p className="text-sm text-gray-400">Starting migration...</p>
+            </div>
           )}
 
           {progress && (
@@ -235,7 +336,7 @@ export default function ProgressPage() {
           )}
         </div>
 
-        {/* Fatal error banner (e.g. invalid Shopify credentials) */}
+        {/* Fatal error banner */}
         {isFailed && progress?.errorLog && (
           <div className="mt-4 bg-red-50 border border-red-200 rounded-xl p-4">
             <p className="text-sm font-semibold text-red-800 mb-1">Migration failed</p>
@@ -249,7 +350,7 @@ export default function ProgressPage() {
           </div>
         )}
 
-        {/* Stop button — shown while running */}
+        {/* Stop button */}
         {isRunning && (
           <div className="mt-3 flex justify-center">
             <button
@@ -287,45 +388,43 @@ export default function ProgressPage() {
           </div>
         )}
 
-        {/* Retry actions with entity selector */}
+        {/* Retry actions */}
         {canRetry && progress && (
           <div className="mt-4 space-y-3">
-            {/* Entity selector — only shown when not actively running (for retry scope) */}
-            {!isRunning && <div className="bg-white border rounded-2xl p-4 shadow-sm">
-              <p className="text-xs font-semibold text-gray-500 mb-3 uppercase tracking-wide">Select what to retry</p>
-              <div className="flex flex-wrap gap-2">
-                {ENTITY_DEFS.map(({ key, label, icon }) => {
-                  const on = entities[key]
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => toggleEntity(key)}
-                      disabled={retrying || cleaning}
-                      className={`
-                        flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium
-                        border transition-all duration-150
-                        ${on
-                          ? 'bg-black text-white border-black shadow-sm'
-                          : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700'
-                        }
-                        disabled:opacity-50 disabled:cursor-not-allowed
-                      `}
-                    >
-                      <span>{icon}</span>
-                      {label}
-                      {on && <span className="ml-0.5 text-xs opacity-60">✓</span>}
-                    </button>
-                  )
-                })}
+            {!isRunning && (
+              <div className="bg-white border rounded-2xl p-4 shadow-sm">
+                <p className="text-xs font-semibold text-gray-500 mb-3 uppercase tracking-wide">Select what to retry</p>
+                <div className="flex flex-wrap gap-2">
+                  {ENTITY_DEFS.map(({ key, label, icon }) => {
+                    const on = entities[key]
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => toggleEntity(key)}
+                        disabled={retrying || cleaning}
+                        className={`
+                          flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium
+                          border transition-all duration-150
+                          ${on
+                            ? 'bg-black text-white border-black shadow-sm'
+                            : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700'
+                          }
+                          disabled:opacity-50 disabled:cursor-not-allowed
+                        `}
+                      >
+                        <span>{icon}</span>
+                        {label}
+                        {on && <span className="ml-0.5 text-xs opacity-60">✓</span>}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-            </div>}
+            )}
 
-            {/* Retry: skip already-migrated items */}
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-4">
               <div>
-                <p className="text-sm font-medium text-amber-900">
-                  {retryHeading}
-                </p>
+                <p className="text-sm font-medium text-amber-900">{retryHeading}</p>
                 <p className="text-xs text-amber-700 mt-0.5">
                   Continues where it left off — already-migrated orders are skipped.
                 </p>
@@ -339,7 +438,6 @@ export default function ProgressPage() {
               </button>
             </div>
 
-            {/* Fix Duplicates & Retry */}
             <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-medium text-red-900">Seeing duplicate products or orders?</p>
@@ -394,6 +492,24 @@ export default function ProgressPage() {
   )
 }
 
+function ConnectionDot({ connected }: Readonly<{ connected: boolean }>) {
+  return (
+    <span className="flex items-center gap-1.5 text-xs text-gray-400">
+      <span className="relative flex h-2 w-2">
+        {connected ? (
+          <>
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+          </>
+        ) : (
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-gray-300" />
+        )}
+      </span>
+      {connected ? 'Live' : 'Reconnecting...'}
+    </span>
+  )
+}
+
 function ProgressRow({
   label, icon, done, total, failed,
 }: Readonly<{
@@ -408,14 +524,17 @@ function ProgressRow({
         <span className="text-sm font-medium flex items-center gap-1.5">
           <span>{icon}</span> {label}
         </span>
-        <span className="text-xs text-gray-500">
-          {isWaiting ? 'Waiting...' : `${done.toLocaleString()} / ${total.toLocaleString()}`}
-          {failed > 0 && <span className="text-red-500 ml-1">({failed} failed)</span>}
+        <span className="text-xs text-gray-500 flex items-center gap-1.5">
+          {isWaiting
+            ? <span className="text-gray-300 italic">Waiting...</span>
+            : <>{done.toLocaleString()} <span className="text-gray-300">/</span> {total.toLocaleString()}</>
+          }
+          {failed > 0 && <span className="text-red-400 ml-1">{failed} failed</span>}
         </span>
       </div>
-      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all duration-500 ${failed > 0 ? 'bg-yellow-400' : 'bg-black'}`}
+          className={`h-full rounded-full transition-all duration-500 ${failed > 0 ? 'bg-amber-400' : 'bg-black'}`}
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -423,18 +542,24 @@ function ProgressRow({
   )
 }
 
-function StatusBadge({ status }: Readonly<{ status: string }>) {
+function StatusBadge({ status, pulsing }: Readonly<{ status: string; pulsing?: boolean }>) {
   const map: Record<string, { label: string; cls: string }> = {
-    PENDING:   { label: 'Queued',    cls: 'bg-gray-100 text-gray-600' },
-    RUNNING:   { label: 'Running',   cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
-    DONE:      { label: 'Complete',  cls: 'bg-green-50 text-green-700 border border-green-200' },
-    PARTIAL:   { label: 'Partial',   cls: 'bg-yellow-50 text-yellow-700 border border-yellow-200' },
-    FAILED:    { label: 'Failed',    cls: 'bg-red-50 text-red-700 border border-red-200' },
-    CANCELLED: { label: 'Stopped',   cls: 'bg-gray-100 text-gray-600 border border-gray-200' },
+    PENDING:   { label: 'Queued',   cls: 'bg-gray-100 text-gray-600' },
+    RUNNING:   { label: 'Running',  cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
+    DONE:      { label: 'Complete', cls: 'bg-green-50 text-green-700 border border-green-200' },
+    PARTIAL:   { label: 'Partial',  cls: 'bg-yellow-50 text-yellow-700 border border-yellow-200' },
+    FAILED:    { label: 'Failed',   cls: 'bg-red-50 text-red-700 border border-red-200' },
+    CANCELLED: { label: 'Stopped',  cls: 'bg-gray-100 text-gray-600 border border-gray-200' },
   }
   const { label, cls } = map[status] ?? map.PENDING
   return (
-    <span className={`inline-block text-xs font-semibold px-3 py-1 rounded-full ${cls}`}>
+    <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full ${cls}`}>
+      {pulsing && (
+        <span className="relative flex h-1.5 w-1.5">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
+        </span>
+      )}
       {label}
     </span>
   )
