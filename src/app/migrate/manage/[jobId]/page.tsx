@@ -67,15 +67,14 @@ export default function ManagePage() {
   const credBody = (c: Creds | null) =>
     c ? { domain: c.domain, token: c.token } : {}
 
-  const is401 = (msg: string) => msg.includes('401') || msg.includes('Invalid API key') || msg.includes('access token')
-
   const fetchCount = async (entity: Entity) => {
     patch(entity, { loading: true, error: null })
     try {
       const res = await fetch(`/api/shopify/manage/${jobId}?entity=${entity}${credParams(savedCreds)}`)
       const data = await res.json()
       if (!res.ok) {
-        if (is401(data.error ?? '')) setShowCredsForm(true)
+        // Only show manual form if the server already tried all automatic fallbacks
+        if (res.status === 401) setShowCredsForm(true)
         throw new Error(data.error ?? 'Failed to fetch')
       }
       patch(entity, { count: data.count, ids: data.ids, loading: false })
