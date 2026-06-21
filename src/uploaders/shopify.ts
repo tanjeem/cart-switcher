@@ -3,9 +3,11 @@ import type { ShopifyCredentials } from '@/types'
 
 const SHOPIFY_API_VERSION = '2024-10'
 
-// Set to false to fall back to REST if GraphQL mutations have issues.
-// REST: 2 req/s hard limit. GraphQL: ~5 mutations/s (cost-based throttle).
+// GraphQL customers: ~5 mutations/s vs REST's 2 req/s.
+// GraphQL orders: requires offline OAuth token; current tokens are online (per-user),
+// so orders must use REST until users reconnect with offline tokens.
 const USE_GRAPHQL = true
+const USE_GRAPHQL_ORDERS = false
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -433,7 +435,7 @@ export class ShopifyUploader {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createOrder(payload: any): Promise<void> {
-    return USE_GRAPHQL ? this.createOrderGql(payload) : this.createOrderRest(payload)
+    return USE_GRAPHQL_ORDERS ? this.createOrderGql(payload) : this.createOrderRest(payload)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

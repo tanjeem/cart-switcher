@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
-import crypto from 'crypto'
+import crypto from 'node:crypto'
 
 const SCOPES = [
   'write_products', 'read_products',
@@ -33,14 +33,12 @@ export async function POST(req: Request) {
     path: '/',
   })
 
-  // grant_options[]=per-user forces the permissions screen even if the app
-  // was previously installed, ensuring we always get a fresh token with all scopes
+  // No grant_options[]=per-user — offline tokens are required for orderCreate GraphQL mutation
   const authUrl = `https://${shopDomain}/admin/oauth/authorize?` + new URLSearchParams({
     client_id: process.env.SHOPIFY_CLIENT_ID!,
     scope: SCOPES,
     redirect_uri: redirectUri,
     state,
-    'grant_options[]': 'per-user',
   })
 
   return NextResponse.json({ authUrl })
