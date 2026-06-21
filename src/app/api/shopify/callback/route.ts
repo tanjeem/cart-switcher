@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
-import crypto from 'crypto'
+import crypto from 'node:crypto'
 import { db } from '@/lib/db'
 import { inngest } from '@/inngest/client'
 
@@ -21,7 +21,7 @@ export async function GET(req: Request) {
     // Verify HMAC to confirm request is from Shopify
     const params = Object.fromEntries(searchParams.entries())
     delete params.hmac
-    const message = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join('&')
+    const message = Object.keys(params).sort((a, b) => a.localeCompare(b)).map(k => `${k}=${params[k]}`).join('&')
     const digest = crypto.createHmac('sha256', process.env.SHOPIFY_CLIENT_SECRET!).update(message).digest('hex')
 
     if (digest !== hmac) {
@@ -35,9 +35,9 @@ export async function GET(req: Request) {
       return NextResponse.redirect(`${APP_URL}/migrate/connect?error=session_expired`)
     }
 
-    let savedState: string, wcUrl: string, wcKey: string, wcSecret: string, isDemo: boolean
+    let savedState: string, wcUrl: string, wcKey: string, wcSecret: string, isDemo: boolean, entities: Record<string, boolean> | undefined
     try {
-      ({ state: savedState, wcUrl, wcKey, wcSecret, isDemo } = JSON.parse(oauthCookie.value))
+      ({ state: savedState, wcUrl, wcKey, wcSecret, isDemo, entities } = JSON.parse(oauthCookie.value))
     } catch {
       return NextResponse.redirect(`${APP_URL}/migrate/connect?error=session_corrupt`)
     }
@@ -96,7 +96,7 @@ export async function GET(req: Request) {
 
     await inngest.send({
       name: 'migration/start',
-      data: { jobId: job.id },
+      data: { jobId: job.id, entities },
     })
 
     return NextResponse.redirect(`${APP_URL}/migrate/progress/${job.id}`)

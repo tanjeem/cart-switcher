@@ -58,7 +58,18 @@ export default function ProgressPage() {
   const [retrying, setRetrying] = useState(false)
   const [cleaning, setCleaning] = useState(false)
   const [stopping, setStopping] = useState(false)
-  const [entities, setEntities] = useState<MigrationEntities>(ALL_ON)
+  const [entities, setEntities] = useState<MigrationEntities>(() => {
+    if (globalThis.window === undefined) return ALL_ON
+    try {
+      const saved = localStorage.getItem('cs-entities')
+      if (saved) {
+        const parsed = JSON.parse(saved) as MigrationEntities
+        const valid = ENTITY_DEFS.every(({ key }) => typeof parsed[key] === 'boolean')
+        if (valid) return parsed
+      }
+    } catch {}
+    return ALL_ON
+  })
 
   useEffect(() => {
     const es = new EventSource(`/api/progress/${jobId}`)
@@ -83,7 +94,9 @@ export default function ProgressPage() {
     setEntities(prev => {
       const next = { ...prev, [key]: !prev[key] }
       const anyOn = Object.values(next).some(Boolean)
-      return anyOn ? next : prev
+      const result = anyOn ? next : prev
+      try { localStorage.setItem('cs-entities', JSON.stringify(result)) } catch {}
+      return result
     })
   }
 

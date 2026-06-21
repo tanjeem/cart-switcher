@@ -13,7 +13,7 @@ const SCOPES = [
 
 export async function POST(req: Request) {
   const body = await req.json()
-  const { shop, wcUrl, wcKey, wcSecret, isDemo } = body
+  const { shop, wcUrl, wcKey, wcSecret, isDemo, entities } = body
 
   if (!shop) return NextResponse.json({ error: 'Shop domain required' }, { status: 400 })
 
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
 
   // Store WC credentials + state in a cookie to survive the OAuth redirect
   const cookieStore = await cookies()
-  cookieStore.set('shopify_oauth', JSON.stringify({ state, wcUrl, wcKey, wcSecret, isDemo }), {
+  cookieStore.set('shopify_oauth', JSON.stringify({ state, wcUrl, wcKey, wcSecret, isDemo, entities }), {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
