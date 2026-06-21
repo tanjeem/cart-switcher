@@ -515,20 +515,24 @@ export class ShopifyUploader {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private async createOrderRest(payload: any): Promise<void> {
-    try {
-      await this.client.post('/orders.json', { order: payload })
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('phone') && (msg.includes('is invalid') || msg.includes('already been taken'))) {
-        const cleanedBilling = payload.billing_address ? { ...payload.billing_address, phone: null } : payload.billing_address
-        const cleanedShipping = payload.shipping_address ? { ...payload.shipping_address, phone: null } : payload.shipping_address
-        await this.client.post('/orders.json', {
-          order: { ...payload, phone: null, billing_address: cleanedBilling, shipping_address: cleanedShipping },
-        })
-      } else {
-        throw err
+    const tryPost = async (order: Record<string, unknown>) => {
+      try {
+        await this.client.post('/orders.json', { order })
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.includes('phone') && (msg.includes('is invalid') || msg.includes('already been taken'))) {
+          await this.client.post('/orders.json', {
+            order: { ...order, phone: null, billing_address: order.billing_address ? { ...(order.billing_address as object), phone: null } : null, shipping_address: order.shipping_address ? { ...(order.shipping_address as object), phone: null } : null },
+          })
+        } else if (msg.includes('shipping_address')) {
+          // Order has no valid shipping address — retry without it
+          await this.client.post('/orders.json', { order: { ...order, shipping_address: null } })
+        } else {
+          throw err
+        }
       }
     }
+    await tryPost(payload)
     // No manual sleep — adaptive interceptor throttles based on X-Shopify-Api-Call-Limit
   }
 
