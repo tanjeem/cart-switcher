@@ -444,7 +444,6 @@ export class ShopifyUploader {
       phone: withPhone ? (p.phone || null) : null,
       financialStatus: (p.financial_status ?? 'pending').toUpperCase(),
       ...(p.fulfillment_status ? { fulfillmentStatus: p.fulfillment_status.toUpperCase() } : {}),
-      currencyCode: p.currency ?? 'USD',
       note: p.note || null,
       processedAt: p.processed_at ?? p.created_at,
       tags: p.tags
@@ -463,8 +462,7 @@ export class ShopifyUploader {
       shippingAddress: withPhone ? this.restAddrToGql(p.shipping_address) : this.restAddrToGql({ ...p.shipping_address, phone: null }),
       billingAddress: withPhone ? this.restAddrToGql(p.billing_address) : this.restAddrToGql({ ...p.billing_address, phone: null }),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      noteAttributes: (p.note_attributes ?? []).map((a: any) => ({ name: a.name, value: String(a.value) })),
-      customer: p.email ? { email: p.email } : undefined,
+      customAttributes: (p.note_attributes ?? []).map((a: any) => ({ key: a.name, value: String(a.value) })),
     })
 
     const MUTATION = `
