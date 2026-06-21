@@ -6,7 +6,7 @@ import { transformProduct, transformCustomer, transformOrder, transformCoupon, t
 import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, NormalizedCoupon, NormalizedPost, MigrationEntities } from '@/types'
 
 const UPLOAD_BATCH = 100     // items per upload step (~60s each, well under 300s)
-const WC_PAGES_PER_STEP = 10 // WC pages per fetch step (1000 items, ~10-20s)
+const WC_PAGES_PER_STEP = 3  // WC pages per fetch step — 3×30s max = 90s, safe under 300s
 const WC_PAGE_SIZE = 100
 const CLEANUP_BATCH = 20      // IDs per delete step
 
@@ -22,6 +22,20 @@ export const migrationFunction = inngest.createFunction(
     concurrency: { limit: 5 },
     retries: 2,
     triggers: [{ event: 'migration/start' }],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onFailure: async ({ event, error }: { event: any; error: any }) => {
+      const jobId = event.data.jobId as string | undefined
+      if (!jobId) return
+      // Only update if still RUNNING — don't overwrite CANCELLED or a previous FAILED
+      await db.migrationJob.updateMany({
+        where: { id: jobId, status: 'RUNNING' },
+        data: {
+          status: 'FAILED',
+          completedAt: new Date(),
+          errorLog: `Migration stopped unexpectedly: ${String(error?.message ?? error ?? 'unknown error')}. Please retry.`,
+        },
+      })
+    },
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async ({ event, step }: { event: any; step: any }) => {
