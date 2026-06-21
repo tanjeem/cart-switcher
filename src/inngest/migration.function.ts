@@ -58,6 +58,23 @@ export const migrationFunction = inngest.createFunction(
       data: { status: 'RUNNING', startedAt: new Date() },
     })
 
+    // ── Credential check — fail fast before any expensive steps ──────────────
+    const credentialsOk = await step.run('validate-credentials', async () => {
+      const ok = await shopify.validate()
+      if (!ok) {
+        await db.migrationJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'FAILED',
+            completedAt: new Date(),
+            errorLog: 'Shopify credentials are invalid or the app was uninstalled. Please reconnect your Shopify store to start a new migration.',
+          },
+        })
+      }
+      return ok
+    })
+    if (!credentialsOk) return
+
     // ── Phase 0 (optional): Remove CartSwitcher duplicates from Shopify ───────
     // Triggered by "Fix Duplicates & Retry". Only touches items CartSwitcher
     // created — identified by the 'cartswitcher-migrated' tag (products) and

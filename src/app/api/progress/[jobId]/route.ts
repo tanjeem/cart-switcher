@@ -36,6 +36,7 @@ export async function GET(
               failedProducts: true,
               failedOrders: true,
               failedCustomers: true,
+              errorLog: true,
             },
           }),
           db.migrationLog.findMany({

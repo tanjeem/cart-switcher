@@ -172,6 +172,7 @@ export interface MigrationProgress {
   failedProducts: number
   failedOrders: number
   failedCustomers: number
+  errorLog?: string | null
   recentErrors?: MigrationError[]
 }
 
