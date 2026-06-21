@@ -260,9 +260,9 @@ export default function ProgressPage() {
         {/* Retry actions with entity selector */}
         {canRetry && progress && (
           <div className="mt-4 space-y-3">
-            {/* Entity selector */}
-            <div className="bg-white border rounded-2xl p-4 shadow-sm">
-              <p className="text-xs font-semibold text-gray-500 mb-3 uppercase tracking-wide">Select what to migrate</p>
+            {/* Entity selector — only shown when not actively running (for retry scope) */}
+            {!isRunning && <div className="bg-white border rounded-2xl p-4 shadow-sm">
+              <p className="text-xs font-semibold text-gray-500 mb-3 uppercase tracking-wide">Select what to retry</p>
               <div className="flex flex-wrap gap-2">
                 {ENTITY_DEFS.map(({ key, label, icon }) => {
                   const on = entities[key]
@@ -288,7 +288,7 @@ export default function ProgressPage() {
                   )
                 })}
               </div>
-            </div>
+            </div>}
 
             {/* Retry: skip already-migrated items */}
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-4">
