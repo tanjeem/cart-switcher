@@ -72,8 +72,12 @@ export default function ProgressPage() {
   })
 
   useEffect(() => {
-    const es = new EventSource(`/api/progress/${jobId}`)
-    es.onmessage = (e) => {
+    let es: EventSource
+    let done = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    // Extracted to avoid nesting beyond 4 levels (linter S2004)
+    const handleMessage = (e: MessageEvent) => {
       const data = JSON.parse(e.data) as MigrationProgress
       setProgress(data)
       if (data.status === 'RUNNING') {
@@ -83,11 +87,29 @@ export default function ProgressPage() {
         ])
       }
       if (['DONE', 'FAILED', 'PARTIAL', 'CANCELLED'].includes(data.status)) {
+        done = true
         es.close()
       }
     }
-    es.onerror = () => es.close()
-    return () => es.close()
+
+    const connect = () => {
+      es = new EventSource(`/api/progress/${jobId}`)
+      es.onmessage = handleMessage
+      es.onerror = () => {
+        es.close()
+        if (!done) {
+          // SSE timed out (Vercel 300s limit) — reconnect after 2s
+          retryTimer = setTimeout(connect, 2000)
+        }
+      }
+    }
+
+    connect()
+    return () => {
+      done = true
+      if (retryTimer) clearTimeout(retryTimer)
+      es.close()
+    }
   }, [jobId])
 
   const toggleEntity = (key: keyof MigrationEntities) => {
@@ -149,6 +171,14 @@ export default function ProgressPage() {
   const canRetry    = isPartial || isFailed || isRunning || isCancelled
 
   const rowVisible = (total: number, done: number) => total > 0 || done > 0
+
+  let retryHeading = 'Some items failed to migrate.'
+  if (isRunning) retryHeading = 'Migration stuck or taking too long?'
+  else if (isCancelled) retryHeading = 'Resume migration?'
+
+  let retryLabel = 'Retry'
+  if (retrying) retryLabel = 'Starting...'
+  else if (isCancelled) retryLabel = 'Resume'
 
   // ETA based on recent throughput (rolling window), not startedAt.
   // startedAt includes pre-upload phases and gives wildly wrong estimates.
@@ -294,7 +324,7 @@ export default function ProgressPage() {
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-medium text-amber-900">
-                  {isRunning ? 'Migration stuck or taking too long?' : isCancelled ? 'Resume migration?' : 'Some items failed to migrate.'}
+                  {retryHeading}
                 </p>
                 <p className="text-xs text-amber-700 mt-0.5">
                   Continues where it left off — already-migrated orders are skipped.
@@ -305,7 +335,7 @@ export default function ProgressPage() {
                 disabled={retrying || cleaning}
                 className="shrink-0 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
               >
-                {retrying ? 'Starting...' : isCancelled ? 'Resume' : 'Retry'}
+                {retryLabel}
               </button>
             </div>
 
@@ -366,9 +396,9 @@ export default function ProgressPage() {
 
 function ProgressRow({
   label, icon, done, total, failed,
-}: {
+}: Readonly<{
   label: string; icon: string; done: number; total: number; failed: number
-}) {
+}>) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0
   const isWaiting = total === 0
 
@@ -393,7 +423,7 @@ function ProgressRow({
   )
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status }: Readonly<{ status: string }>) {
   const map: Record<string, { label: string; cls: string }> = {
     PENDING:   { label: 'Queued',    cls: 'bg-gray-100 text-gray-600' },
     RUNNING:   { label: 'Running',   cls: 'bg-blue-50 text-blue-700 border border-blue-200' },

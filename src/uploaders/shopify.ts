@@ -25,9 +25,23 @@ export class ShopifyUploader {
       timeout: 30000,
     })
 
-    // Retry on 429, throw readable error on others
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.client.interceptors.response.use(undefined, async (error: any) => {
+    this.client.interceptors.response.use(async (response: any) => {
+      // Adaptive REST throttling: read bucket state from every response header.
+      // Shopify REST bucket: 40 capacity, restores at 2/s.
+      // Sleep only when headroom is low — lets us use burst capacity instead of
+      // always sleeping a fixed 500ms regardless of bucket state.
+      const limitHeader = response.headers['x-shopify-api-call-limit'] as string | undefined
+      if (limitHeader) {
+        const [usedStr, maxStr] = limitHeader.split('/')
+        const available = parseInt(maxStr, 10) - parseInt(usedStr, 10)
+        if (available < 5) {
+          await sleep((5 - available) * 500)
+        }
+      }
+      return response
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }, async (error: any) => {
       if (error.response?.status === 429) {
         const retryAfter = parseInt(error.response.headers['retry-after'] ?? '2', 10)
         await sleep(retryAfter * 1000)
@@ -212,6 +226,7 @@ export class ShopifyUploader {
         if (attr) existing.add(attr.value)
       }
       path = this.parseNextPath(res.headers['link'] ?? '')
+      if (path) await sleep(500) // don't exhaust REST bucket before order uploads begin
     }
     return existing
   }
@@ -514,7 +529,7 @@ export class ShopifyUploader {
         throw err
       }
     }
-    await sleep(500)
+    // No manual sleep — adaptive interceptor throttles based on X-Shopify-Api-Call-Limit
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

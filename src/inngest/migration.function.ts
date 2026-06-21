@@ -5,7 +5,7 @@ import { ShopifyUploader } from '@/uploaders/shopify'
 import { transformProduct, transformCustomer, transformOrder, transformCoupon, transformPost } from '@/transformers'
 import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, NormalizedCoupon, NormalizedPost, MigrationEntities } from '@/types'
 
-const UPLOAD_BATCH = 50      // items per upload step (~25s each, well under 300s)
+const UPLOAD_BATCH = 100     // items per upload step (~60s each, well under 300s)
 const WC_PAGES_PER_STEP = 10 // WC pages per fetch step (1000 items, ~10-20s)
 const WC_PAGE_SIZE = 100
 const CLEANUP_BATCH = 20      // IDs per delete step
