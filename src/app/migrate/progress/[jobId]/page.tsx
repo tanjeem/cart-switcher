@@ -22,11 +22,30 @@ function formatEta(seconds: number): string {
   return `~${mins} min`
 }
 
-function calcEta(done: number, total: number, startedAt?: string): string | null {
-  if (!startedAt || done === 0 || total === 0 || done >= total) return null
-  const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000
-  const rate = done / elapsed
-  if (rate <= 0) return null
+// Rolling window of recent progress samples — used to calculate ETA from
+// actual recent throughput instead of startedAt (which includes pre-upload phases).
+interface ProgressSample {
+  time: number
+  customers: number
+  orders: number
+}
+
+const SAMPLE_WINDOW = 20 // keep last 20 samples (~30s at 1.5s polling)
+
+function rollingEta(
+  done: number,
+  total: number,
+  field: 'customers' | 'orders',
+  samples: ProgressSample[],
+): string | null {
+  if (done === 0 || done >= total || samples.length < 2) return null
+  const oldest = samples[0]
+  const newest = samples.at(-1)
+  if (!oldest || !newest) return null
+  const elapsed = (newest.time - oldest.time) / 1000
+  const delta = newest[field] - oldest[field]
+  if (delta <= 0 || elapsed <= 0) return null
+  const rate = delta / elapsed
   const remaining = (total - done) / rate
   return formatEta(remaining)
 }
@@ -35,6 +54,7 @@ export default function ProgressPage() {
   const { jobId } = useParams<{ jobId: string }>()
   const router = useRouter()
   const [progress, setProgress] = useState<MigrationProgress | null>(null)
+  const [samples, setSamples] = useState<ProgressSample[]>([])
   const [retrying, setRetrying] = useState(false)
   const [cleaning, setCleaning] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -45,6 +65,12 @@ export default function ProgressPage() {
     es.onmessage = (e) => {
       const data = JSON.parse(e.data) as MigrationProgress
       setProgress(data)
+      if (data.status === 'RUNNING') {
+        setSamples(prev => [
+          ...prev.slice(-(SAMPLE_WINDOW - 1)),
+          { time: Date.now(), customers: data.doneCustomers, orders: data.doneOrders },
+        ])
+      }
       if (['DONE', 'FAILED', 'PARTIAL', 'CANCELLED'].includes(data.status)) {
         es.close()
       }
@@ -111,13 +137,15 @@ export default function ProgressPage() {
 
   const rowVisible = (total: number, done: number) => total > 0 || done > 0
 
-  // ETA for the overall migration: use the slowest-running entity
-  const customerEta = progress ? calcEta(progress.doneCustomers, progress.totalCustomers, progress.startedAt) : null
-  const orderEta    = progress ? calcEta(progress.doneOrders, progress.totalOrders, progress.startedAt) : null
-
-  // Since orders run after customers, show order ETA only when customers are done
-  const customersDone = progress ? (progress.totalCustomers === 0 || progress.doneCustomers >= progress.totalCustomers) : false
-  const activeEta = customersDone ? orderEta : customerEta
+  // ETA based on recent throughput (rolling window), not startedAt.
+  // startedAt includes pre-upload phases and gives wildly wrong estimates.
+  const customersDone = !progress?.totalCustomers || progress.doneCustomers >= progress.totalCustomers
+  let activeEta: string | null = null
+  if (progress) {
+    activeEta = customersDone
+      ? rollingEta(progress.doneOrders, progress.totalOrders, 'orders', samples)
+      : rollingEta(progress.doneCustomers, progress.totalCustomers, 'customers', samples)
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center px-4 py-12">
