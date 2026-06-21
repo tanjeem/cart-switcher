@@ -5,7 +5,7 @@ import { ShopifyUploader } from '@/uploaders/shopify'
 import { transformProduct, transformCustomer, transformOrder, transformCoupon, transformPost } from '@/transformers'
 import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, NormalizedCoupon, NormalizedPost, MigrationEntities } from '@/types'
 
-const UPLOAD_BATCH = 100     // items per upload step (~60s each, well under 300s)
+const UPLOAD_BATCH = 25      // Vercel Hobby cap is 60s; 25 orders × ~600ms = ~15s, safely under
 const WC_PAGES_PER_STEP = 3  // WC pages per fetch step — 3×30s max = 90s, safe under 300s
 const WC_PAGE_SIZE = 100
 const CLEANUP_BATCH = 20      // IDs per delete step
