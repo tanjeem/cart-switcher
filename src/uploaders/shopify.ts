@@ -64,8 +64,10 @@ export class ShopifyUploader {
       if (error.response?.status === 429) {
         const retries = (error.config?._429retries ?? 0) as number
         if (retries >= 3) throw new Error('Shopify 429: rate limit exceeded after 3 retries')
-        const retryAfter = parseInt(error.response.headers['retry-after'] ?? '2', 10)
-        await sleep(retryAfter * 1000)
+        // Exponential backoff: 2s → 4s → 8s regardless of retry-after header
+        // (retry-after can be 0 on some Shopify plans which causes instant-fail loops)
+        const baseDelay = Math.max(2, parseInt(error.response.headers['retry-after'] ?? '2', 10))
+        await sleep(baseDelay * Math.pow(2, retries) * 1000)
         return this.client.request({ ...error.config, _429retries: retries + 1 })
       }
       const body = error.response?.data
@@ -554,7 +556,10 @@ export class ShopifyUploader {
       }
     }
     await tryPost(payload)
-    // No manual sleep — adaptive interceptor throttles based on X-Shopify-Api-Call-Limit
+    // Fixed 500ms between orders = 2 req/s max sustained, matching Shopify's REST restore rate.
+    // The adaptive interceptor alone isn't enough — bursts can exhaust the 40-slot bucket before
+    // it fires, causing cascading 429s across the whole batch.
+    await sleep(500)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

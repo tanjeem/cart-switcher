@@ -7,7 +7,7 @@ import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, Normalized
 
 const UPLOAD_BATCH = 25           // customers / products — REST, 25 × ~600ms = ~15s under 60s
 const GQL_ORDER_BATCH = 100       // GQL orders: 1000-point bucket restores at 50/s, 100 orders ~15s
-const REST_ORDER_BATCH = 25       // REST orders: limited to 2 req/s, 25 × ~600ms = ~15s
+const REST_ORDER_BATCH = 50       // REST orders: 50 × 700ms (500ms sleep + ~200ms API) = ~35s
 const WC_PAGES_PER_STEP = 3       // WC pages per fetch step — 3×30s max = 90s, safe under 300s
 const WC_PAGE_SIZE = 100
 const CLEANUP_BATCH = 20      // IDs per delete step
