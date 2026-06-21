@@ -371,6 +371,8 @@ export class ShopifyUploader {
     if (!existing) return
 
     const gid = `gid://shopify/Customer/${existing.id}`
+    // emailMarketingConsent is not accepted by customerUpdate — strip it
+    const { emailMarketingConsent: _emc, ...updateInput } = input
     const UPDATE = `
       mutation customerUpdate($input: CustomerInput!) {
         customerUpdate(input: $input) {
@@ -378,14 +380,14 @@ export class ShopifyUploader {
           userErrors { field message }
         }
       }`
-    const data = await this.gql(UPDATE, { input: { ...input, id: gid } })
+    const data = await this.gql(UPDATE, { input: { ...updateInput, id: gid } })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const errors: { message: string }[] = data.customerUpdate.userErrors
     if (errors.length) {
       // If phone still bad on update, retry without it
       const phoneBad = errors.some(e => e.message?.toLowerCase().includes('phone'))
       if (phoneBad) {
-        await this.gql(UPDATE, { input: { ...input, id: gid, phone: null } })
+        await this.gql(UPDATE, { input: { ...updateInput, id: gid, phone: null } })
       } else {
         throw new Error(errors.map(e => e.message).join('; '))
       }
