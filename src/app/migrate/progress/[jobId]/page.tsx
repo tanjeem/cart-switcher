@@ -81,7 +81,11 @@ export default function ProgressPage() {
   const [stopping, setStopping] = useState(false)
   const [connected, setConnected] = useState(false)
   const [staleSecs, setStaleSecs] = useState(0)
+  const [ordersFrozenSecs, setOrdersFrozenSecs] = useState(0)
+  const [bulkStatus, setBulkStatus] = useState<{ status: string; objectCount: number } | null>(null)
   const lastUpdateRef = useRef<number | null>(null)
+  const lastOrdersChangeRef = useRef<number | null>(null)
+  const lastOrdersValueRef = useRef<number | null>(null)
   const [entities, setEntities] = useState<MigrationEntities>(() => {
     if (globalThis.window === undefined) return ALL_ON
     try {
@@ -95,15 +99,30 @@ export default function ProgressPage() {
     return ALL_ON
   })
 
-  // Tick every second to keep "updated X ago" live
+  // Tick every second to keep "updated X ago" and orders-frozen counter live
   useEffect(() => {
     const id = setInterval(() => {
       if (lastUpdateRef.current !== null) {
         setStaleSecs(Math.floor((Date.now() - lastUpdateRef.current) / 1000))
       }
+      if (lastOrdersChangeRef.current !== null) {
+        setOrdersFrozenSecs(Math.floor((Date.now() - lastOrdersChangeRef.current) / 1000))
+      }
     }, 1000)
     return () => clearInterval(id)
   }, [])
+
+  // Track when doneOrders last changed so we can detect bulk-operation stall
+  useEffect(() => {
+    if (progress === null) return
+    if (progress.doneOrders !== lastOrdersValueRef.current) {
+      lastOrdersValueRef.current = progress.doneOrders
+      lastOrdersChangeRef.current = Date.now()
+      setOrdersFrozenSecs(0)
+      setBulkStatus(null)
+    }
+  }, [progress])
+
 
   useEffect(() => {
     let es: EventSource
@@ -210,6 +229,27 @@ export default function ProgressPage() {
   const isStale     = isRunning && staleSecs >= 45
   const isVeryStale = isRunning && staleSecs >= 120
 
+  // Orders frozen = same count for >20s while upload is still pending
+  const isOrdersFrozen = (
+    isRunning &&
+    ordersFrozenSecs > 20 &&
+    (progress?.doneOrders ?? 0) < (progress?.totalOrders ?? 0) &&
+    (progress?.totalOrders ?? 0) > 0
+  )
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!isOrdersFrozen) return
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/shopify/bulk-status/${jobId}`)
+        if (res.ok) setBulkStatus(await res.json())
+      } catch { /* network hiccup — next poll will retry */ }
+    }
+    poll()
+    const id = setInterval(poll, 10000)
+    return () => clearInterval(id)
+  }, [isOrdersFrozen, jobId])
+
   let retryHeading = 'Some items failed to migrate.'
   if (isRunning) retryHeading = 'Migration stuck or taking too long?'
   else if (isCancelled) retryHeading = 'Resume migration?'
@@ -267,6 +307,42 @@ export default function ProgressPage() {
                 Updated {formatStaleness(staleSecs)}
               </span>
             )}
+          </div>
+        )}
+
+        {/* Bulk operation in-progress banner */}
+        {isOrdersFrozen && !isVeryStale && (
+          <div className="mb-4 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 flex items-start gap-3">
+            <div className="mt-0.5 shrink-0 w-4 h-4 border-2 border-blue-400 border-t-blue-700 rounded-full animate-spin" />
+            <div className="flex-1 min-w-0">
+              {bulkStatus && bulkStatus.status === 'RUNNING' && bulkStatus.objectCount > 0 ? (
+                <>
+                  <p className="text-sm font-medium text-blue-900">
+                    Shopify has processed {bulkStatus.objectCount.toLocaleString()} orders so far
+                  </p>
+                  <p className="text-xs text-blue-700 mt-0.5">
+                    Uploading in bulk — the counter will jump when Shopify finishes the batch.
+                  </p>
+                </>
+              ) : bulkStatus && bulkStatus.status === 'COMPLETED' ? (
+                <>
+                  <p className="text-sm font-medium text-blue-900">Shopify finished — saving results...</p>
+                  <p className="text-xs text-blue-700 mt-0.5">Counter will update in a few seconds.</p>
+                </>
+              ) : bulkStatus && bulkStatus.status === 'FAILED' ? (
+                <>
+                  <p className="text-sm font-medium text-red-800">Bulk operation failed on Shopify</p>
+                  <p className="text-xs text-red-700 mt-0.5">Stop the migration and retry orders to restart it.</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-blue-900">Orders uploading via bulk operation</p>
+                  <p className="text-xs text-blue-700 mt-0.5">
+                    Shopify processes all orders server-side — takes 5–15 min for large stores. Counter updates when done.
+                  </p>
+                </>
+              )}
+            </div>
           </div>
         )}
 
