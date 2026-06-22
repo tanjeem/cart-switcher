@@ -63,8 +63,8 @@ export class ShopifyUploader {
     }, async (error: any) => {
       if (error.response?.status === 429) {
         const retries = (error.config?._429retries ?? 0) as number
-        if (retries >= 3) throw new Error('Shopify 429: rate limit exceeded after 3 retries')
-        // Exponential backoff: 2s → 4s → 8s regardless of retry-after header
+        if (retries >= 8) throw new Error('Shopify 429: rate limit exceeded after 8 retries')
+        // Exponential backoff: 2s → 4s → 8s → 16s → 32s → 64s → 128s → 256s
         // (retry-after can be 0 on some Shopify plans which causes instant-fail loops)
         const baseDelay = Math.max(2, parseInt(error.response.headers['retry-after'] ?? '2', 10))
         await sleep(baseDelay * Math.pow(2, retries) * 1000)
@@ -477,9 +477,8 @@ export class ShopifyUploader {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private async createOrderGql(payload: any): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const buildOrder = (p: any, withPhone = true) => ({
+  private buildOrderGqlInput(p: any, withPhone = true): Record<string, unknown> {
+    return {
       email: p.email,
       phone: withPhone ? (p.phone || null) : null,
       financialStatus: (p.financial_status ?? 'pending').toUpperCase(),
@@ -503,8 +502,11 @@ export class ShopifyUploader {
       billingAddress: withPhone ? this.restAddrToGql(p.billing_address) : this.restAddrToGql({ ...p.billing_address, phone: null }),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       customAttributes: (p.note_attributes ?? []).map((a: any) => ({ key: a.name, value: String(a.value) })),
-    })
+    }
+  }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async createOrderGql(payload: any): Promise<void> {
     const MUTATION = `
       mutation orderCreate($order: OrderCreateOrderInput!, $options: OrderCreateOptionsInput) {
         orderCreate(order: $order, options: $options) {
@@ -515,25 +517,126 @@ export class ShopifyUploader {
 
     const options = { inventoryBehaviour: 'BYPASS', sendReceipt: false, sendFulfillmentReceipt: false }
 
-    const tryCreate = async (order: Record<string, unknown>) => {
+    const tryCreate = async (order: Record<string, unknown>, attempt = 0): Promise<void> => {
       const data = await this.gql(MUTATION, { order, options })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const errors: { field: string[]; message: string }[] = data.orderCreate.userErrors
       if (!errors.length) return
 
+      const rateLimited = errors.some(e =>
+        e.message?.toLowerCase().includes('too many attempts') ||
+        e.message?.toLowerCase().includes('throttled')
+      )
+      if (rateLimited) {
+        if (attempt >= 7) throw new Error(`orderCreate throttled after ${attempt + 1} attempts`)
+        await sleep(Math.pow(2, attempt) * 1500) // 1.5s → 3s → 6s → 12s → 24s → 48s → 96s
+        return tryCreate(order, attempt + 1)
+      }
+
       const phoneBad = errors.some(e =>
         e.field?.some(f => f.toLowerCase().includes('phone')) || e.message?.toLowerCase().includes('phone')
       )
       if (phoneBad) {
-        const retryData = await this.gql(MUTATION, { order: buildOrder(payload, false), options })
+        const retryData = await this.gql(MUTATION, { order: this.buildOrderGqlInput(payload, false), options })
         const retryErrors = retryData.orderCreate.userErrors
         if (retryErrors.length) throw new Error(retryErrors.map((e: { message: string }) => e.message).join('; '))
       } else {
-        throw new Error(errors.map(e => `${e.field?.join('.')}: ${e.message}`).join('; '))
+        throw new Error(errors.map(e => e.message).join('; '))
       }
     }
 
-    await tryCreate(buildOrder(payload))
+    await tryCreate(this.buildOrderGqlInput(payload))
+  }
+
+  // ── Bulk order creation via Shopify Bulk Operations API ───────────────────
+  // Uploads all orders as a JSONL file processed server-side — no client-side
+  // rate limiting needed. 10-50× faster than serial GQL mutations.
+
+  private static readonly ORDER_MUTATION_FOR_BULK = `
+    mutation orderCreate($order: OrderCreateOrderInput!, $options: OrderCreateOptionsInput) {
+      orderCreate(order: $order, options: $options) {
+        order { id }
+        userErrors { field message }
+      }
+    }`
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async startBulkOrderCreation(payloads: any[]): Promise<string> {
+    const options = { inventoryBehaviour: 'BYPASS', sendReceipt: false, sendFulfillmentReceipt: false }
+    const jsonl = payloads
+      .map(p => JSON.stringify({ order: this.buildOrderGqlInput(p), options }))
+      .join('\n')
+
+    // Stage upload
+    const stageRes = await this.gql(`
+      mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+        stagedUploadsCreate(input: $input) {
+          stagedTargets { url resourceUrl parameters { name value } }
+          userErrors { message }
+        }
+      }`, {
+      input: [{ resource: 'BULK_MUTATION_VARIABLES', filename: 'orders.jsonl', mimeType: 'text/jsonl', httpMethod: 'POST' }],
+    })
+    if (stageRes.stagedUploadsCreate.userErrors?.length) {
+      throw new Error(stageRes.stagedUploadsCreate.userErrors.map((e: { message: string }) => e.message).join('; '))
+    }
+    const target = stageRes.stagedUploadsCreate.stagedTargets[0]
+
+    // Upload JSONL to S3
+    const form = new FormData()
+    for (const p of target.parameters) form.append(p.name, p.value)
+    form.append('file', new Blob([jsonl], { type: 'text/jsonl' }), 'orders.jsonl')
+    const uploadRes = await fetch(target.url, { method: 'POST', body: form })
+    if (!uploadRes.ok) throw new Error(`Staged upload failed: HTTP ${uploadRes.status}`)
+
+    // Start bulk operation
+    const bulkRes = await this.gql(`
+      mutation bulkOperationRunMutation($mutation: String!, $stagedUploadPath: String!) {
+        bulkOperationRunMutation(mutation: $mutation, stagedUploadPath: $stagedUploadPath) {
+          bulkOperation { id status }
+          userErrors { message }
+        }
+      }`, {
+      mutation: ShopifyUploader.ORDER_MUTATION_FOR_BULK,
+      stagedUploadPath: target.resourceUrl,
+    })
+    if (bulkRes.bulkOperationRunMutation.userErrors?.length) {
+      throw new Error(bulkRes.bulkOperationRunMutation.userErrors.map((e: { message: string }) => e.message).join('; '))
+    }
+    return bulkRes.bulkOperationRunMutation.bulkOperation.id
+  }
+
+  async checkBulkOperation(): Promise<{ id: string; status: string; url: string | null; objectCount: number }> {
+    const res = await this.gql(`
+      query {
+        currentBulkOperation(type: MUTATION) {
+          id status errorCode url objectCount
+        }
+      }`)
+    const op = res.currentBulkOperation ?? {}
+    return { id: op.id ?? '', status: op.status ?? 'COMPLETED', url: op.url ?? null, objectCount: Number(op.objectCount ?? 0) }
+  }
+
+  async downloadBulkResults(url: string): Promise<{ done: number; failed: number; failedLogs: { entityId: string; message: string }[] }> {
+    const res = await fetch(url)
+    const text = await res.text()
+    let done = 0, failed = 0
+    const failedLogs: { entityId: string; message: string }[] = []
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const item = JSON.parse(line) as any
+        if (item.orderCreate?.order?.id) {
+          done++
+        } else if (item.orderCreate?.userErrors?.length) {
+          failed++
+          const msg = item.orderCreate.userErrors.map((e: { message: string }) => e.message).join('; ')
+          failedLogs.push({ entityId: String(item.__lineNumber ?? 'unknown'), message: msg })
+        }
+      } catch { /* skip malformed lines */ }
+    }
+    return { done, failed, failedLogs }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -556,10 +659,9 @@ export class ShopifyUploader {
       }
     }
     await tryPost(payload)
-    // Fixed 500ms between orders = 2 req/s max sustained, matching Shopify's REST restore rate.
-    // The adaptive interceptor alone isn't enough — bursts can exhaust the 40-slot bucket before
-    // it fires, causing cascading 429s across the whole batch.
-    await sleep(500)
+    // 700ms between orders ≈ 1.4 req/s, giving 0.6 req/s of headroom above Shopify's 2/s
+    // restore rate so bursts don't cascade into 429s across the whole batch.
+    await sleep(700)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

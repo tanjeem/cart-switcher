@@ -5,9 +5,11 @@ import { ShopifyUploader } from '@/uploaders/shopify'
 import { transformProduct, transformCustomer, transformOrder, transformCoupon, transformPost } from '@/transformers'
 import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, NormalizedCoupon, NormalizedPost, MigrationEntities } from '@/types'
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
 const UPLOAD_BATCH = 25           // customers / products — REST, 25 × ~600ms = ~15s under 60s
 const GQL_ORDER_BATCH = 100       // GQL orders: 1000-point bucket restores at 50/s, 100 orders ~15s
-const REST_ORDER_BATCH = 50       // REST orders: 50 × 700ms (500ms sleep + ~200ms API) = ~35s
+const REST_ORDER_BATCH = 50       // REST orders: 50 × 900ms (700ms sleep + ~200ms API) = ~45s
 const WC_PAGES_PER_STEP = 3       // WC pages per fetch step — 3×30s max = 90s, safe under 300s
 const WC_PAGE_SIZE = 100
 const CLEANUP_BATCH = 20      // IDs per delete step
@@ -329,33 +331,92 @@ export const migrationFunction = inngest.createFunction(
       }
     }
 
-    // Phase 3c: Orders (after customers to avoid combined rate-limit pressure)
+    // Phase 3c: Orders
+    // GQL path → Shopify Bulk Operations (all orders uploaded as JSONL, processed server-side,
+    // no client-side rate limiting needed — 10-50× faster than serial mutations).
+    // REST path → serial batches with adaptive throttle (used when token is online-only).
     if (entities.orders) {
-      for (let i = 0; i < orderBatches.length; i++) {
-        await step.run(`upload-orders-${i}`, async () => {
-          if (await isCancelled()) return
-          let done = 0
-          let failed = 0
-          const failedLogs: { entityId: string; message: string }[] = []
-          for (const order of orderBatches[i]) {
-            if (existingOrders.has(order.sourceId)) {
-              done++
-              continue
+      if (gqlOrdersOk) {
+        const pendingOrders = (orders as NormalizedOrder[]).filter(o => !existingOrders.has(o.sourceId))
+        const skippedCount = orders.length - pendingOrders.length
+
+        // Credit already-migrated orders immediately so progress bar reflects reality
+        if (skippedCount > 0) {
+          await step.run('bulk-orders-skip-credit', async () => {
+            await db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: skippedCount } } })
+          })
+        }
+
+        if (pendingOrders.length > 0) {
+          const operationId = await step.run('bulk-orders-start', async () => {
+            if (await isCancelled()) return null
+            const payloads = pendingOrders.map(o => transformOrder(o))
+            return shopify.startBulkOrderCreation(payloads)
+          })
+
+          if (operationId) {
+            // Poll until Shopify finishes processing — each poll is a durable Inngest step
+            let bulkStatus = 'RUNNING'
+            let bulkResultUrl = ''
+            for (let poll = 0; poll < 80 && (bulkStatus === 'RUNNING' || bulkStatus === 'CREATED'); poll++) {
+              await step.sleep(`bulk-orders-wait-${poll}`, '15s')
+              const check = await step.run(`bulk-orders-poll-${poll}`, async () => {
+                if (await isCancelled()) return { id: '', status: 'CANCELLED', url: null, objectCount: 0 }
+                const status = await shopify.checkBulkOperation()
+                // Live progress: update processed count so the UI doesn't stall at 0%
+                if (status.objectCount > 0) {
+                  await db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: skippedCount + status.objectCount } })
+                }
+                return status
+              }) as { id: string; status: string; url: string | null; objectCount: number }
+              bulkStatus = check.status
+              bulkResultUrl = check.url ?? ''
+              if (bulkStatus === 'CANCELLED') break
             }
-            try {
-              await shopify.createOrder(transformOrder(order))
-              done++
-            } catch (err: unknown) {
-              const msg = err instanceof Error ? err.message : String(err)
-              failedLogs.push({ entityId: order.sourceId, message: msg })
-              failed++
+
+            if (bulkResultUrl) {
+              await step.run('bulk-orders-results', async () => {
+                const { done, failed, failedLogs } = await shopify.downloadBulkResults(bulkResultUrl)
+                await Promise.all([
+                  db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: skippedCount + done, failedOrders: failed } }),
+                  ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'order', entityId: l.entityId, status: 'failed', message: l.message } })),
+                ])
+              })
+            } else if (bulkStatus !== 'CANCELLED') {
+              // Bulk op timed out or errored — mark all pending as failed
+              await step.run('bulk-orders-timeout', async () => {
+                await db.migrationJob.update({ where: { id: jobId }, data: { failedOrders: { increment: pendingOrders.length } } })
+              })
             }
           }
-          await Promise.all([
-            db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: done }, failedOrders: { increment: failed } } }),
-            ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'order', entityId: l.entityId, status: 'failed', message: l.message } })),
-          ])
-        })
+        }
+      } else {
+        // REST serial path: 700ms between orders keeps rate under Shopify's 2 req/s restore rate
+        for (let i = 0; i < orderBatches.length; i++) {
+          await step.run(`upload-orders-${i}`, async () => {
+            // Let the REST bucket recover between batches
+            if (i > 0) await sleep(3000)
+            if (await isCancelled()) return
+            let done = 0
+            let failed = 0
+            const failedLogs: { entityId: string; message: string }[] = []
+            for (const order of orderBatches[i]) {
+              if (existingOrders.has(order.sourceId)) { done++; continue }
+              try {
+                await shopify.createOrder(transformOrder(order))
+                done++
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err)
+                failedLogs.push({ entityId: order.sourceId, message: msg })
+                failed++
+              }
+            }
+            await Promise.all([
+              db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: { increment: done }, failedOrders: { increment: failed } } }),
+              ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'order', entityId: l.entityId, status: 'failed', message: l.message } })),
+            ])
+          })
+        }
       }
     }
 
