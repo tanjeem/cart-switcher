@@ -613,12 +613,15 @@ export class ShopifyUploader {
           id status errorCode url objectCount
         }
       }`)
-    const op = res.currentBulkOperation ?? {}
-    return { id: op.id ?? '', status: op.status ?? 'COMPLETED', url: op.url ?? null, objectCount: Number(op.objectCount ?? 0) }
+    const op = res.currentBulkOperation
+    // null = no recent bulk operation on this store (don't assume COMPLETED — keep polling)
+    if (!op) return { id: '', status: 'NOT_FOUND', url: null, objectCount: 0 }
+    return { id: op.id ?? '', status: op.status ?? 'FAILED', url: op.url ?? null, objectCount: Number(op.objectCount ?? 0) }
   }
 
   async downloadBulkResults(url: string): Promise<{ done: number; failed: number; failedLogs: { entityId: string; message: string }[] }> {
-    const res = await fetch(url)
+    const res = await fetch(url, { signal: AbortSignal.timeout(45_000) })
+    if (!res.ok) throw new Error(`Bulk results fetch failed: HTTP ${res.status}`)
     const text = await res.text()
     let done = 0, failed = 0
     const failedLogs: { entityId: string; message: string }[] = []

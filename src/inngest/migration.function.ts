@@ -358,7 +358,9 @@ export const migrationFunction = inngest.createFunction(
             // Poll until Shopify finishes processing — each poll is a durable Inngest step
             let bulkStatus = 'RUNNING'
             let bulkResultUrl = ''
-            for (let poll = 0; poll < 80 && (bulkStatus === 'RUNNING' || bulkStatus === 'CREATED'); poll++) {
+            // NOT_FOUND = Shopify cleared the operation slot mid-poll; treat as still pending
+            const PENDING = new Set(['RUNNING', 'CREATED', 'NOT_FOUND'])
+            for (let poll = 0; poll < 80 && PENDING.has(bulkStatus); poll++) {
               await step.sleep(`bulk-orders-wait-${poll}`, '15s')
               const check = await step.run(`bulk-orders-poll-${poll}`, async () => {
                 if (await isCancelled()) return { id: '', status: 'CANCELLED', url: null, objectCount: 0 }
@@ -377,13 +379,18 @@ export const migrationFunction = inngest.createFunction(
             if (bulkResultUrl) {
               await step.run('bulk-orders-results', async () => {
                 const { done, failed, failedLogs } = await shopify.downloadBulkResults(bulkResultUrl)
-                await Promise.all([
-                  db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: skippedCount + done, failedOrders: failed } }),
-                  ...failedLogs.map(l => db.migrationLog.create({ data: { jobId, entity: 'order', entityId: l.entityId, status: 'failed', message: l.message } })),
-                ])
+                // Use createMany for one round-trip instead of N concurrent creates
+                // (individual Promise.all spreads can saturate the connection pool and timeout)
+                await db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: skippedCount + done, failedOrders: failed } })
+                if (failedLogs.length > 0) {
+                  await db.migrationLog.createMany({
+                    data: failedLogs.map(l => ({ jobId, entity: 'order', entityId: l.entityId, status: 'failed', message: l.message })),
+                    skipDuplicates: true,
+                  })
+                }
               })
             } else if (bulkStatus !== 'CANCELLED') {
-              // Bulk op timed out or errored — mark all pending as failed
+              // Bulk op timed out, errored, or URL never returned — mark all pending as failed
               await step.run('bulk-orders-timeout', async () => {
                 await db.migrationJob.update({ where: { id: jobId }, data: { failedOrders: { increment: pendingOrders.length } } })
               })
