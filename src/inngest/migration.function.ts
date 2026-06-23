@@ -11,7 +11,14 @@ const UPLOAD_BATCH = 25           // customers / products — REST, 25 × ~600ms
 const REST_ORDER_BATCH = 15       // REST orders: 15 × ~900ms = ~14s, leaves room for throttle delays
 const WC_PAGES_PER_STEP = 3       // WC pages per fetch step — 3×30s max = 90s, safe under 300s
 const WC_PAGE_SIZE = 100
-const CLEANUP_BATCH = 20      // IDs per delete step
+const CLEANUP_BATCH = 20          // IDs per delete step
+// Vercel maxDuration is 60s. Per-order timeout + step budget ensure we never blow past it:
+// worst case = STEP_BUDGET_MS of orders + remaining time for the final DB write.
+const ORDER_TIMEOUT_MS = 20_000   // hard cap per order (axios is 30s — this fires first)
+const STEP_BUDGET_MS   = 44_000   // bail out of the order loop after 44s; leaves ~16s for DB writes
+
+const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`order timed out after ${ms}ms`)), ms))])
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
@@ -328,13 +335,16 @@ export const migrationFunction = inngest.createFunction(
       for (let i = 0; i < orderBatches.length; i++) {
         await step.run(`upload-orders-${i}`, async () => {
           if (await isCancelled()) return
+          const stepStart = Date.now()
           let done = 0
           let failed = 0
           const failedLogs: { entityId: string; message: string }[] = []
           for (const order of orderBatches[i]) {
+            // Bail early if we're approaching Vercel's 60s function limit
+            if (Date.now() - stepStart > STEP_BUDGET_MS) break
             if (existingOrders.has(order.sourceId)) { done++; continue }
             try {
-              await shopify.createOrder(transformOrder(order))
+              await withTimeout(shopify.createOrder(transformOrder(order)), ORDER_TIMEOUT_MS)
               done++
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err)
