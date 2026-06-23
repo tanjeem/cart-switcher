@@ -34,7 +34,10 @@ function chunk<T>(arr: T[], size: number): T[][] {
 export const migrationFunction = inngest.createFunction(
   {
     id: 'run-migration',
-    concurrency: { limit: 5 },
+    // Scope concurrency per jobId so each migration job gets its own slot.
+    // A global limit (no key) caused new jobs to queue indefinitely when
+    // Inngest still considered previous stuck runs as active (occupying slots).
+    concurrency: { limit: 1, key: 'event.data.jobId' },
     retries: 2,
     triggers: [{ event: 'migration/start' }],
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -42,8 +45,10 @@ export const migrationFunction = inngest.createFunction(
       const originalEvent = event.data.event
       const jobId = originalEvent?.data?.jobId as string | undefined
       if (!jobId) return
+      // Match PENDING too — if the function crashes before the status → RUNNING
+      // update, the job stays PENDING ("Queued") forever without this.
       await db.migrationJob.updateMany({
-        where: { id: jobId, status: 'RUNNING' },
+        where: { id: jobId, status: { in: ['PENDING', 'RUNNING'] } },
         data: {
           status: 'FAILED',
           completedAt: new Date(),
