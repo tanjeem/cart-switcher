@@ -8,7 +8,7 @@ import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, Normalized
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 const UPLOAD_BATCH = 25           // customers / products — REST, 25 × ~600ms = ~15s under 60s
-const REST_ORDER_BATCH = 50       // REST orders: 50 × 900ms (700ms sleep + ~200ms API) = ~45s
+const REST_ORDER_BATCH = 15       // REST orders: 15 × ~900ms = ~14s, leaves room for throttle delays
 const WC_PAGES_PER_STEP = 3       // WC pages per fetch step — 3×30s max = 90s, safe under 300s
 const WC_PAGE_SIZE = 100
 const CLEANUP_BATCH = 20      // IDs per delete step
@@ -326,8 +326,8 @@ export const migrationFunction = inngest.createFunction(
     // Phase 3c: Orders — REST serial batches with adaptive throttle
     if (entities.orders) {
       for (let i = 0; i < orderBatches.length; i++) {
+        if (i > 0) await step.sleep(`order-batch-pause-${i}`, '3s')
         await step.run(`upload-orders-${i}`, async () => {
-          if (i > 0) await sleep(3000) // let the REST bucket recover between batches
           if (await isCancelled()) return
           let done = 0
           let failed = 0
