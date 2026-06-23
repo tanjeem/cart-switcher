@@ -4,34 +4,12 @@ import type { ShopifyCredentials } from '@/types'
 const SHOPIFY_API_VERSION = '2024-10'
 
 // GraphQL customers: ~5 mutations/s vs REST's 2 req/s.
-// GraphQL orders: requires offline OAuth token. Detected at runtime via canUseGraphQLOrders().
 const USE_GRAPHQL = true
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export class ShopifyUploader {
   private client: AxiosInstance
-  private gqlOrders = false
-
-  enableGqlOrders() { this.gqlOrders = true }
-
-  /** Probe whether this access token supports GraphQL orderCreate (requires offline token). */
-  async canUseGraphQLOrders(): Promise<boolean> {
-    try {
-      // Empty lineItems will return userErrors, not a permission error, if the token is offline.
-      // An online (per-user) token returns HTTP 403 which the interceptor turns into a thrown Error.
-      await this.gql(`mutation { orderCreate(order: { lineItems: [] }) { userErrors { message } } }`)
-      return true
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      // Explicit access/permission failure → online token, must use REST
-      if (msg.includes('403') || msg.toLowerCase().includes('access') || msg.toLowerCase().includes('offline')) {
-        return false
-      }
-      // Any other error (e.g. throttle) — assume capable; per-order errors will be caught normally
-      return true
-    }
-  }
 
   constructor(private creds: ShopifyCredentials) {
     const domain = creds.domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
@@ -315,22 +293,6 @@ export class ShopifyUploader {
     return res.data.data
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private restAddrToGql(a: any) {
-    if (!a) return null
-    return {
-      firstName: a.first_name ?? '',
-      lastName: a.last_name ?? '',
-      address1: a.address1 ?? '',
-      address2: a.address2 || null,
-      city: a.city ?? '',
-      province: a.province || null,
-      zip: a.zip ?? '',
-      country: a.country ?? '',
-      phone: a.phone || null,
-    }
-  }
-
   // ── createCustomer ────────────────────────────────────────────────────────
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -473,186 +435,7 @@ export class ShopifyUploader {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createOrder(payload: any): Promise<void> {
-    return this.gqlOrders ? this.createOrderGql(payload) : this.createOrderRest(payload)
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private buildOrderGqlInput(p: any, withPhone = true): Record<string, unknown> {
-    return {
-      email: p.email,
-      phone: withPhone ? (p.phone || null) : null,
-      financialStatus: (p.financial_status ?? 'pending').toUpperCase(),
-      ...(p.fulfillment_status ? { fulfillmentStatus: p.fulfillment_status.toUpperCase() } : {}),
-      note: p.note || null,
-      processedAt: p.processed_at ?? p.created_at,
-      tags: p.tags
-        ? (typeof p.tags === 'string' ? p.tags.split(',').map((t: string) => t.trim()).filter(Boolean) : p.tags)
-        : [],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      lineItems: (p.line_items ?? []).map((li: any) => ({
-        title: li.title,
-        ...(li.variant_title ? { variantTitle: li.variant_title } : {}),
-        ...(li.sku ? { sku: li.sku } : {}),
-        quantity: li.quantity ?? 1,
-        priceSet: { shopMoney: { amount: String(li.price ?? '0.00'), currencyCode: p.currency ?? 'USD' } },
-        taxable: li.taxable ?? true,
-        requiresShipping: li.requires_shipping ?? true,
-      })),
-      shippingAddress: withPhone ? this.restAddrToGql(p.shipping_address) : this.restAddrToGql({ ...p.shipping_address, phone: null }),
-      billingAddress: withPhone ? this.restAddrToGql(p.billing_address) : this.restAddrToGql({ ...p.billing_address, phone: null }),
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      customAttributes: (p.note_attributes ?? []).map((a: any) => ({ key: a.name, value: String(a.value) })),
-    }
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private async createOrderGql(payload: any): Promise<void> {
-    const MUTATION = `
-      mutation orderCreate($order: OrderCreateOrderInput!, $options: OrderCreateOptionsInput) {
-        orderCreate(order: $order, options: $options) {
-          order { id }
-          userErrors { field message }
-        }
-      }`
-
-    const options = { inventoryBehaviour: 'BYPASS', sendReceipt: false, sendFulfillmentReceipt: false }
-
-    const tryCreate = async (order: Record<string, unknown>, attempt = 0): Promise<void> => {
-      const data = await this.gql(MUTATION, { order, options })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const errors: { field: string[]; message: string }[] = data.orderCreate.userErrors
-      if (!errors.length) return
-
-      const rateLimited = errors.some(e =>
-        e.message?.toLowerCase().includes('too many attempts') ||
-        e.message?.toLowerCase().includes('throttled')
-      )
-      if (rateLimited) {
-        if (attempt >= 7) throw new Error(`orderCreate throttled after ${attempt + 1} attempts`)
-        await sleep(Math.pow(2, attempt) * 1500) // 1.5s → 3s → 6s → 12s → 24s → 48s → 96s
-        return tryCreate(order, attempt + 1)
-      }
-
-      const phoneBad = errors.some(e =>
-        e.field?.some(f => f.toLowerCase().includes('phone')) || e.message?.toLowerCase().includes('phone')
-      )
-      if (phoneBad) {
-        const retryData = await this.gql(MUTATION, { order: this.buildOrderGqlInput(payload, false), options })
-        const retryErrors = retryData.orderCreate.userErrors
-        if (retryErrors.length) throw new Error(retryErrors.map((e: { message: string }) => e.message).join('; '))
-      } else {
-        throw new Error(errors.map(e => e.message).join('; '))
-      }
-    }
-
-    await tryCreate(this.buildOrderGqlInput(payload))
-  }
-
-  // ── Bulk order creation via Shopify Bulk Operations API ───────────────────
-  // Uploads all orders as a JSONL file processed server-side — no client-side
-  // rate limiting needed. 10-50× faster than serial GQL mutations.
-
-  private static readonly ORDER_MUTATION_FOR_BULK = `
-    mutation orderCreate($order: OrderCreateOrderInput!, $options: OrderCreateOptionsInput) {
-      orderCreate(order: $order, options: $options) {
-        order { id }
-        userErrors { field message }
-      }
-    }`
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async startBulkOrderCreation(payloads: any[]): Promise<string> {
-    const options = { inventoryBehaviour: 'BYPASS', sendReceipt: false, sendFulfillmentReceipt: false }
-    const jsonl = payloads
-      .map(p => JSON.stringify({ order: this.buildOrderGqlInput(p), options }))
-      .join('\n')
-
-    // Stage upload
-    const stageRes = await this.gql(`
-      mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
-        stagedUploadsCreate(input: $input) {
-          stagedTargets { url resourceUrl parameters { name value } }
-          userErrors { message }
-        }
-      }`, {
-      input: [{ resource: 'BULK_MUTATION_VARIABLES', filename: 'orders.jsonl', mimeType: 'text/jsonl', httpMethod: 'POST' }],
-    })
-    if (stageRes.stagedUploadsCreate.userErrors?.length) {
-      throw new Error(stageRes.stagedUploadsCreate.userErrors.map((e: { message: string }) => e.message).join('; '))
-    }
-    const target = stageRes.stagedUploadsCreate.stagedTargets[0]
-
-    // Upload JSONL to S3
-    const form = new FormData()
-    for (const p of target.parameters) form.append(p.name, p.value)
-    form.append('file', new Blob([jsonl], { type: 'text/jsonl' }), 'orders.jsonl')
-    const uploadRes = await fetch(target.url, { method: 'POST', body: form })
-    if (!uploadRes.ok) throw new Error(`Staged upload failed: HTTP ${uploadRes.status}`)
-    const key = target.parameters.find((p: any) => p.name === 'key')?.value
-    if (!key) throw new Error('Missing key in staged target parameters')
-
-    // Start bulk operation
-    const bulkRes = await this.gql(`
-      mutation bulkOperationRunMutation($mutation: String!, $stagedUploadPath: String!) {
-        bulkOperationRunMutation(mutation: $mutation, stagedUploadPath: $stagedUploadPath) {
-          bulkOperation { id status }
-          userErrors { message }
-        }
-      }`, {
-      mutation: ShopifyUploader.ORDER_MUTATION_FOR_BULK,
-      stagedUploadPath: key,
-    })
-    if (bulkRes.bulkOperationRunMutation.userErrors?.length) {
-      throw new Error(bulkRes.bulkOperationRunMutation.userErrors.map((e: { message: string }) => e.message).join('; '))
-    }
-    return bulkRes.bulkOperationRunMutation.bulkOperation.id
-  }
-
-  async checkBulkOperation(id?: string): Promise<{ id: string; status: string; url: string | null; objectCount: number }> {
-    let res;
-    if (id) {
-      res = await this.gql(`
-        query bulkOp($id: ID!) {
-          node(id: $id) {
-            ... on BulkOperation {
-              id status errorCode url objectCount
-            }
-          }
-        }`, { id })
-    } else {
-      res = await this.gql(`
-        query {
-          currentBulkOperation(type: MUTATION) {
-            id status errorCode url objectCount
-          }
-        }`)
-    }
-    const op = id ? res.node : res.currentBulkOperation
-    if (!op) return { id: '', status: 'NOT_FOUND', url: null, objectCount: 0 }
-    return { id: op.id ?? '', status: op.status ?? 'FAILED', url: op.url ?? null, objectCount: Number(op.objectCount ?? 0) }
-  }
-
-  async downloadBulkResults(url: string): Promise<{ done: number; failed: number; failedLogs: { entityId: string; message: string }[] }> {
-    const res = await fetch(url, { signal: AbortSignal.timeout(45_000) })
-    if (!res.ok) throw new Error(`Bulk results fetch failed: HTTP ${res.status}`)
-    const text = await res.text()
-    let done = 0, failed = 0
-    const failedLogs: { entityId: string; message: string }[] = []
-    for (const line of text.split('\n')) {
-      if (!line.trim()) continue
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const item = JSON.parse(line) as any
-        if (item.orderCreate?.order?.id) {
-          done++
-        } else if (item.orderCreate?.userErrors?.length) {
-          failed++
-          const msg = item.orderCreate.userErrors.map((e: { message: string }) => e.message).join('; ')
-          failedLogs.push({ entityId: String(item.__lineNumber ?? 'unknown'), message: msg })
-        }
-      } catch { /* skip malformed lines */ }
-    }
-    return { done, failed, failedLogs }
+    return this.createOrderRest(payload)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
