@@ -6,3 +6,6 @@ export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [migrationFunction],
 })
+
+export const maxDuration = 60
+

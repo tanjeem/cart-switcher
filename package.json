@@ -14,6 +14,7 @@
     "@prisma/client": "^5.22.0",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
+    "@woocommerce/woocommerce-rest-api": "^1.0.2",
     "axios": "^1.18.0",
     "inngest": "^4.5.1",
     "next": "16.2.9",

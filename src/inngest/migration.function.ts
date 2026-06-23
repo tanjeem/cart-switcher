@@ -28,7 +28,8 @@ export const migrationFunction = inngest.createFunction(
     triggers: [{ event: 'migration/start' }],
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     onFailure: async ({ event, error }: { event: any; error: any }) => {
-      const jobId = event.data.jobId as string | undefined
+      const originalEvent = event.data.event
+      const jobId = originalEvent?.data?.jobId as string | undefined
       if (!jobId) return
       // Only update if still RUNNING — don't overwrite CANCELLED or a previous FAILED
       await db.migrationJob.updateMany({

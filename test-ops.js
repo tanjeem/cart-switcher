@@ -1,0 +1,23 @@
+const { PrismaClient } = require('@prisma/client')
+const prisma = new PrismaClient()
+
+async function main() {
+  const job = await prisma.migrationJob.findUnique({
+    where: { id: 'cmqqyr1xb0001cn6xuklml785' }
+  })
+  const domain = job.shopifyDomain.replace(/^https?:\/\//, '').replace(/\/$/, '')
+  
+  const res = await fetch(`https://${domain}/admin/api/2024-10/graphql.json`, {
+    method: 'POST',
+    headers: { 'X-Shopify-Access-Token': job.shopifyAccessToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: `query {
+        currentBulkOperation {
+          id status objectCount
+        }
+      }`
+    })
+  })
+  console.log(await res.json())
+}
+main().catch(console.error).finally(() => prisma.$disconnect())
