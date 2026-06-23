@@ -361,7 +361,7 @@ export const migrationFunction = inngest.createFunction(
             let bulkResultUrl = ''
             // NOT_FOUND = Shopify cleared the operation slot mid-poll; treat as still pending
             const PENDING = new Set(['RUNNING', 'CREATED', 'NOT_FOUND'])
-            for (let poll = 0; poll < 80 && PENDING.has(bulkStatus); poll++) {
+            for (let poll = 0; poll < 240 && PENDING.has(bulkStatus); poll++) {
               await step.sleep(`bulk-orders-wait-${poll}`, '15s')
               const check = await step.run(`bulk-orders-poll-${poll}`, async () => {
                 if (await isCancelled()) return { id: '', status: 'CANCELLED', url: null, objectCount: 0 }
