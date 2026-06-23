@@ -22,8 +22,9 @@ export async function GET(
   })
 
   try {
-    const result = await shopify.checkBulkOperation()
-    return NextResponse.json(result)
+    // Rely on Inngest worker for actual polling. 
+    // Just return RUNNING so the UI doesn't get tricked by stale Shopify cache.
+    return NextResponse.json({ id: '', status: 'RUNNING', objectCount: 0, url: null })
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
