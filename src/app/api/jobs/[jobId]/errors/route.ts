@@ -15,7 +15,7 @@ export async function GET(
 
   const grouped = new Map<string, number>()
   for (const log of logs) {
-    const key = log.message
+    const key = log.message ?? 'unknown'
     grouped.set(key, (grouped.get(key) ?? 0) + 1)
   }
 
