@@ -96,9 +96,7 @@ export const migrationFunction = inngest.createFunction(
 
     // Detect whether this token supports GraphQL orderCreate (offline tokens only).
     // Result is memoized by Inngest so replays return the cached boolean instantly.
-    const gqlOrdersOk = entities.orders
-      ? await step.run('detect-order-api', () => shopify.canUseGraphQLOrders())
-      : false
+    const gqlOrdersOk = false
     if (gqlOrdersOk) shopify.enableGqlOrders()
 
     // ── Phase 0 (optional): Remove CartSwitcher duplicates from Shopify ───────
