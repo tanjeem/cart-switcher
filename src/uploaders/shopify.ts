@@ -45,7 +45,9 @@ export class ShopifyUploader {
         // Fewer retries with shorter delays (e.g. 3 × 1s) caused all rate-limited
         // orders to fail because 1s wasn't long enough for the bucket to recover
         // between attempts. Respecting the full retry-after gives the bucket time.
-        if (retries >= 8) throw new Error('Shopify 429: rate limit exceeded after 8 retries')
+        // 5 retries × 3s = 15s max — fits two rate-limited orders within the 25s step
+        // budget (vs 8 × 3s = 24s which forced only 1 order per step).
+        if (retries >= 5) throw new Error('Shopify 429: rate limit exceeded after 5 retries')
         const retryAfter = parseInt(error.response.headers['retry-after'] ?? '0', 10)
         const delayMs = Math.min(3000, retryAfter > 0 ? retryAfter * 1000 : (retries + 1) * 1000)
         await sleep(delayMs)
@@ -461,12 +463,12 @@ export class ShopifyUploader {
     }
     const t0 = Date.now()
     await tryPost(payload)
-    // Enforce a minimum 700ms per order to stay under Shopify's 2 req/s limit,
-    // but don't add extra delay when the POST already took longer than 700ms.
-    // Previously sleep(700) was always additive: a 1.5s response + 700ms = 2.2s/order.
-    // Now a 1.5s response skips the sleep entirely → ~1.5s/order, ~40% faster.
+    // Enforce a minimum 1200ms per order (~0.5 req/s sustained).
+    // Shopify's bucket restores at 2/s — leaving ~1.5 tokens/s of headroom for
+    // other store apps so the shared bucket doesn't deplete and trigger 429 bursts.
+    // Each 429 costs 3s of retry delay; preventing them is faster than recovering.
     const elapsed = Date.now() - t0
-    if (elapsed < 700) await sleep(700 - elapsed)
+    if (elapsed < 1200) await sleep(1200 - elapsed)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
