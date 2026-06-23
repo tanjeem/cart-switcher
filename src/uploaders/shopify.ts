@@ -42,10 +42,12 @@ export class ShopifyUploader {
       if (error.response?.status === 429) {
         const retries = (error.config?._429retries ?? 0) as number
         if (retries >= 8) throw new Error('Shopify 429: rate limit exceeded after 8 retries')
-        // Exponential backoff: 2s → 4s → 8s → 16s → 32s → 64s → 128s → 256s
-        // (retry-after can be 0 on some Shopify plans which causes instant-fail loops)
-        const baseDelay = Math.max(2, parseInt(error.response.headers['retry-after'] ?? '2', 10))
-        await sleep(baseDelay * Math.pow(2, retries) * 1000)
+        // Use retry-after directly if provided; otherwise linear backoff (2s, 4s, 6s…).
+        // Hard cap at 30s so we never blow past Inngest's step timeout — the old exponential
+        // formula could compound retry-after × 2^n and sleep for minutes inside a single step.
+        const retryAfter = parseInt(error.response.headers['retry-after'] ?? '0', 10)
+        const delayMs = Math.min(30000, retryAfter > 0 ? retryAfter * 1000 : (retries + 1) * 2000)
+        await sleep(delayMs)
         return this.client.request({ ...error.config, _429retries: retries + 1 })
       }
       const body = error.response?.data
