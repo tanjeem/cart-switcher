@@ -326,7 +326,6 @@ export const migrationFunction = inngest.createFunction(
     // Phase 3c: Orders — REST serial batches with adaptive throttle
     if (entities.orders) {
       for (let i = 0; i < orderBatches.length; i++) {
-        if (i > 0) await step.sleep(`order-batch-pause-${i}`, '3s')
         await step.run(`upload-orders-${i}`, async () => {
           if (await isCancelled()) return
           let done = 0
