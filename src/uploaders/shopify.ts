@@ -588,6 +588,8 @@ export class ShopifyUploader {
     form.append('file', new Blob([jsonl], { type: 'text/jsonl' }), 'orders.jsonl')
     const uploadRes = await fetch(target.url, { method: 'POST', body: form })
     if (!uploadRes.ok) throw new Error(`Staged upload failed: HTTP ${uploadRes.status}`)
+    const key = target.parameters.find((p: any) => p.name === 'key')?.value
+    if (!key) throw new Error('Missing key in staged target parameters')
 
     // Start bulk operation
     const bulkRes = await this.gql(`
@@ -598,7 +600,7 @@ export class ShopifyUploader {
         }
       }`, {
       mutation: ShopifyUploader.ORDER_MUTATION_FOR_BULK,
-      stagedUploadPath: target.resourceUrl,
+      stagedUploadPath: key,
     })
     if (bulkRes.bulkOperationRunMutation.userErrors?.length) {
       throw new Error(bulkRes.bulkOperationRunMutation.userErrors.map((e: { message: string }) => e.message).join('; '))
