@@ -606,15 +606,26 @@ export class ShopifyUploader {
     return bulkRes.bulkOperationRunMutation.bulkOperation.id
   }
 
-  async checkBulkOperation(): Promise<{ id: string; status: string; url: string | null; objectCount: number }> {
-    const res = await this.gql(`
-      query {
-        currentBulkOperation(type: MUTATION) {
-          id status errorCode url objectCount
-        }
-      }`)
-    const op = res.currentBulkOperation
-    // null = no recent bulk operation on this store (don't assume COMPLETED — keep polling)
+  async checkBulkOperation(id?: string): Promise<{ id: string; status: string; url: string | null; objectCount: number }> {
+    let res;
+    if (id) {
+      res = await this.gql(`
+        query bulkOp($id: ID!) {
+          node(id: $id) {
+            ... on BulkOperation {
+              id status errorCode url objectCount
+            }
+          }
+        }`, { id })
+    } else {
+      res = await this.gql(`
+        query {
+          currentBulkOperation(type: MUTATION) {
+            id status errorCode url objectCount
+          }
+        }`)
+    }
+    const op = id ? res.node : res.currentBulkOperation
     if (!op) return { id: '', status: 'NOT_FOUND', url: null, objectCount: 0 }
     return { id: op.id ?? '', status: op.status ?? 'FAILED', url: op.url ?? null, objectCount: Number(op.objectCount ?? 0) }
   }

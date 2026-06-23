@@ -364,7 +364,7 @@ export const migrationFunction = inngest.createFunction(
               await step.sleep(`bulk-orders-wait-${poll}`, '15s')
               const check = await step.run(`bulk-orders-poll-${poll}`, async () => {
                 if (await isCancelled()) return { id: '', status: 'CANCELLED', url: null, objectCount: 0 }
-                const status = await shopify.checkBulkOperation()
+                const status = await shopify.checkBulkOperation(operationId)
                 // Live progress: update processed count so the UI doesn't stall at 0%
                 if (status.objectCount > 0) {
                   await db.migrationJob.update({ where: { id: jobId }, data: { doneOrders: skippedCount + status.objectCount } })
