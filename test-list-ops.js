@@ -11,12 +11,15 @@ async function main() {
     headers: { 'X-Shopify-Access-Token': job.shopifyAccessToken, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       query: `query {
-        currentBulkOperation(type: MUTATION) {
-          id status objectCount errorCode
+        currentBulkOperation {
+          id status objectCount
         }
       }`
     })
   })
+  
+  // Actually, there is NO list of bulk operations in Shopify API. 
+  // Wait, let's try to query currentBulkOperation without type MUTATION just in case.
   console.log(await res.json())
 }
 main().catch(console.error).finally(() => prisma.$disconnect())

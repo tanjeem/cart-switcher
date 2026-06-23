@@ -351,9 +351,23 @@ export const migrationFunction = inngest.createFunction(
         if (pendingOrders.length > 0) {
           const operationId = await step.run('bulk-orders-start', async () => {
             if (await isCancelled()) return null
-            const payloads = pendingOrders.map(o => transformOrder(o))
-            return shopify.startBulkOrderCreation(payloads)
-          })
+            if (pendingOrders.length === 0) return null
+            try {
+              const payloads = pendingOrders.map(o => transformOrder(o))
+              return await shopify.startBulkOrderCreation(payloads)
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err)
+              await db.migrationJob.update({
+                where: { id: jobId },
+                data: {
+                  status: 'FAILED',
+                  errorLog: `Bulk order creation failed: ${msg}`,
+                  completedAt: new Date(),
+                }
+              })
+              throw err
+            }
+          }) as string | null
 
           if (operationId) {
             // Poll until Shopify finishes processing — each poll is a durable Inngest step
