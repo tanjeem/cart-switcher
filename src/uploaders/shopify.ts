@@ -41,12 +41,13 @@ export class ShopifyUploader {
     }, async (error: any) => {
       if (error.response?.status === 429) {
         const retries = (error.config?._429retries ?? 0) as number
-        // 3 retries × 1s = 3s max from 429 handling.
-        // Previous limit (8 retries × 3s = 24s) exceeded the 30s per-order timeout,
-        // causing every rate-limited order to appear as a "timed out" failure.
-        if (retries >= 3) throw new Error('Shopify 429: rate limit exceeded after 3 retries')
+        // 8 retries × 3s cap = 24s max — fits within ORDER_TIMEOUT_MS (30s).
+        // Fewer retries with shorter delays (e.g. 3 × 1s) caused all rate-limited
+        // orders to fail because 1s wasn't long enough for the bucket to recover
+        // between attempts. Respecting the full retry-after gives the bucket time.
+        if (retries >= 8) throw new Error('Shopify 429: rate limit exceeded after 8 retries')
         const retryAfter = parseInt(error.response.headers['retry-after'] ?? '0', 10)
-        const delayMs = Math.min(1000, retryAfter > 0 ? retryAfter * 1000 : (retries + 1) * 500)
+        const delayMs = Math.min(3000, retryAfter > 0 ? retryAfter * 1000 : (retries + 1) * 1000)
         await sleep(delayMs)
         return this.client.request({ ...error.config, _429retries: retries + 1 })
       }
