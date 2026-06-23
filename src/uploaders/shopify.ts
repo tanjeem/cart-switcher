@@ -463,12 +463,14 @@ export class ShopifyUploader {
     }
     const t0 = Date.now()
     await tryPost(payload)
-    // Enforce a minimum 1200ms per order (~0.5 req/s sustained).
-    // Shopify's bucket restores at 2/s — leaving ~1.5 tokens/s of headroom for
+    // Enforce a minimum 900ms per order (~1.1 req/s sustained).
+    // Shopify's bucket restores at 2/s — leaving ~0.9 tokens/s of headroom for
     // other store apps so the shared bucket doesn't deplete and trigger 429 bursts.
-    // Each 429 costs 3s of retry delay; preventing them is faster than recovering.
+    // 900ms allows 25 orders per step within the 25s step budget (vs 20 at 1200ms),
+    // giving ~67 orders/min (up from 50/min). Each 429 costs 3s of retry delay;
+    // preventing them is faster than recovering.
     const elapsed = Date.now() - t0
-    if (elapsed < 1200) await sleep(1200 - elapsed)
+    if (elapsed < 900) await sleep(900 - elapsed)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
