@@ -3,22 +3,20 @@ import { db } from '@/lib/db'
 import { WooCommerceFetcher } from '@/fetchers/woocommerce'
 import { ShopifyUploader } from '@/uploaders/shopify'
 import { transformProduct, transformCustomer, transformOrder, transformCoupon, transformPost } from '@/transformers'
-import type { NormalizedProduct, NormalizedCustomer, NormalizedOrder, NormalizedCoupon, NormalizedPost, MigrationEntities } from '@/types'
+import type { NormalizedProduct, NormalizedCoupon, NormalizedPost, MigrationEntities } from '@/types'
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const UPLOAD_BATCH     = 25   // products per step
+const WC_PAGE_SIZE     = 100
+const CLEANUP_BATCH    = 20
+const ORDER_PAGE_SIZE  = 20   // orders fetched+uploaded per step: 20 × ~900ms = ~18s
+const CUSTOMER_PAGE_SIZE = 25 // customers fetched+uploaded per step: 25 × ~600ms = ~15s
 
-const UPLOAD_BATCH = 25           // customers / products — REST, 25 × ~600ms = ~15s under 60s
-const REST_ORDER_BATCH = 15       // REST orders: 15 × ~900ms = ~14s, leaves room for throttle delays
-const WC_PAGES_PER_STEP = 3       // WC pages per fetch step — 3×30s max = 90s, safe under 300s
-const WC_PAGE_SIZE = 100
-const CLEANUP_BATCH = 20          // IDs per delete step
-// Vercel maxDuration is 60s. Per-order timeout + step budget ensure we never blow past it:
-// worst case = STEP_BUDGET_MS of orders + remaining time for the final DB write.
-const ORDER_TIMEOUT_MS = 20_000   // hard cap per order (axios is 30s — this fires first)
-const STEP_BUDGET_MS   = 44_000   // bail out of the order loop after 44s; leaves ~16s for DB writes
+// Vercel maxDuration = 60s. Hard-cap each order so the step body never overruns.
+const ORDER_TIMEOUT_MS = 20_000  // per-order cap (axios is 30s — this fires first)
+const STEP_BUDGET_MS   = 44_000  // bail out of the order loop; leaves ~16s for DB writes
 
 const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
-  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`order timed out after ${ms}ms`)), ms))])
+  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timed out after ${ms}ms`)), ms))])
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
@@ -37,7 +35,6 @@ export const migrationFunction = inngest.createFunction(
       const originalEvent = event.data.event
       const jobId = originalEvent?.data?.jobId as string | undefined
       if (!jobId) return
-      // Only update if still RUNNING — don't overwrite CANCELLED or a previous FAILED
       await db.migrationJob.updateMany({
         where: { id: jobId, status: 'RUNNING' },
         data: {
@@ -52,7 +49,6 @@ export const migrationFunction = inngest.createFunction(
   async ({ event, step }: { event: any; step: any }) => {
     const { jobId, cleanFirst, entities: rawEntities } = event.data
 
-    // Default: all entity types enabled when not specified
     const entities: MigrationEntities = {
       products:  rawEntities?.products  ?? true,
       customers: rawEntities?.customers ?? true,
@@ -83,7 +79,7 @@ export const migrationFunction = inngest.createFunction(
       data: { status: 'RUNNING', startedAt: new Date() },
     })
 
-    // ── Credential check — fail fast before any expensive steps ──────────────
+    // ── Credential check ──────────────────────────────────────────────────────
     const credentialsOk = await step.run('validate-credentials', async () => {
       const ok = await shopify.validate()
       if (!ok) {
@@ -100,10 +96,7 @@ export const migrationFunction = inngest.createFunction(
     })
     if (!credentialsOk) return
 
-    // ── Phase 0 (optional): Remove CartSwitcher duplicates from Shopify ───────
-    // Triggered by "Fix Duplicates & Retry". Only touches items CartSwitcher
-    // created — identified by the 'cartswitcher-migrated' tag (products) and
-    // note_attributes[wc_order_id] (orders). Never deletes merchant-added items.
+    // ── Phase 0 (optional): Remove CartSwitcher duplicates ────────────────────
     if (cleanFirst) {
       const [dupProductIds, dupOrderIds] = await Promise.all([
         entities.products
@@ -139,8 +132,11 @@ export const migrationFunction = inngest.createFunction(
       ])
     }
 
-    // ── Phase 1: Count + existing-order snapshot ───────────────────────────────
-    // Only run counts / fetches for enabled entity types.
+    // ── Phase 1: Counts + existing-order snapshot + small entity fetches ──────
+    // Orders and customers are NOT fetched here — they're fetched per-step in
+    // Phase 3 so their data is never stored in Inngest's memoization state.
+    // (Storing 2476 full order objects in Inngest state caused each subsequent
+    // step invocation to deserialize megabytes of data on every replay.)
     const [orderCount, customerCount, existingOrderIdsArr, products, coupons, posts] = await Promise.all([
       entities.orders
         ? step.run('count-orders', async () => wc.getCount('/orders'))
@@ -194,47 +190,8 @@ export const migrationFunction = inngest.createFunction(
       data: { totalOrders: effectiveOrderCount, totalCustomers: effectiveCustomerCount },
     })
 
-    // ── Phase 2: Fetch orders + customers in page-range steps ─────────────────
-    const orderPageStepCount    = entities.orders    ? Math.max(1, Math.ceil(effectiveOrderCount    / (WC_PAGE_SIZE * WC_PAGES_PER_STEP))) : 0
-    const customerPageStepCount = entities.customers ? Math.max(1, Math.ceil(effectiveCustomerCount / (WC_PAGE_SIZE * WC_PAGES_PER_STEP))) : 0
-
-    const [orderChunks, customerChunks] = await Promise.all([
-      orderPageStepCount > 0
-        ? Promise.all(
-            Array.from({ length: orderPageStepCount }, (_, i) =>
-              step.run(`fetch-orders-${i}`, async () => {
-                const startPage = i * WC_PAGES_PER_STEP + 1
-                const items = await wc.getOrdersInRange(startPage, WC_PAGES_PER_STEP)
-                return items.slice(0, Math.max(0, effectiveOrderCount - i * WC_PAGE_SIZE * WC_PAGES_PER_STEP))
-              })
-            )
-          )
-        : Promise.resolve([]),
-      customerPageStepCount > 0
-        ? Promise.all(
-            Array.from({ length: customerPageStepCount }, (_, i) =>
-              step.run(`fetch-customers-${i}`, async () => {
-                const startPage = i * WC_PAGES_PER_STEP + 1
-                const items = await wc.getCustomersInRange(startPage, WC_PAGES_PER_STEP)
-                return items.slice(0, Math.max(0, effectiveCustomerCount - i * WC_PAGE_SIZE * WC_PAGES_PER_STEP))
-              })
-            )
-          )
-        : Promise.resolve([]),
-    ])
-
-    const orders    = (orderChunks    as NormalizedOrder[][]   ).flat()
-    const customers = (customerChunks as NormalizedCustomer[][]).flat()
+    // Existing orders set is small (just string IDs) — safe to keep in Inngest state
     const existingOrders = new Set<string>(existingOrderIdsArr as string[])
-
-    // ── Phase 3: Upload ───────────────────────────────────────────────────────
-    // Products, coupons, and posts upload in parallel (they're fast/few).
-    // Customers then orders upload SEQUENTIALLY to stay under Shopify's 2 req/s
-    // rate limit — running both simultaneously causes rate-limit collisions that
-    // add 2s retry delays per item, making parallel execution slower overall.
-    const productBatches  = chunk(products  as NormalizedProduct[], UPLOAD_BATCH)
-    const customerBatches = chunk(customers,                         UPLOAD_BATCH)
-    const orderBatches    = chunk(orders,                            REST_ORDER_BATCH)
 
     // Helper: check if this job was cancelled between steps
     const isCancelled = async () => {
@@ -242,7 +199,9 @@ export const migrationFunction = inngest.createFunction(
       return s?.status === 'CANCELLED'
     }
 
-    // Phase 3a: Products + coupons + posts in parallel (fast, small counts)
+    // ── Phase 2: Products + coupons + posts (small, fetched upfront) ──────────
+    const productBatches = chunk(products as NormalizedProduct[], UPLOAD_BATCH)
+
     await Promise.all([
 
       // ── Products ──
@@ -304,15 +263,20 @@ export const migrationFunction = inngest.createFunction(
         : Promise.resolve(),
     ])
 
-    // Phase 3b: Customers (sequential to stay under 2 req/s without collisions)
-    if (entities.customers) {
-      for (let i = 0; i < customerBatches.length; i++) {
-        await step.run(`upload-customers-${i}`, async () => {
+    // ── Phase 3: Customers — fetch + upload per WC page ───────────────────────
+    // Each step fetches CUSTOMER_PAGE_SIZE customers from WC and uploads them
+    // immediately. Nothing is returned to Inngest state, so replay overhead stays
+    // constant regardless of how many steps have completed.
+    if (entities.customers && effectiveCustomerCount > 0) {
+      const customerPageCount = Math.ceil(effectiveCustomerCount / CUSTOMER_PAGE_SIZE)
+      for (let page = 1; page <= customerPageCount; page++) {
+        await step.run(`customers-page-${page}`, async () => {
           if (await isCancelled()) return
+          const wcCustomers = await wc.getCustomerPage(page, CUSTOMER_PAGE_SIZE)
           let done = 0
           let failed = 0
           const failedLogs: { entityId: string; message: string }[] = []
-          for (const customer of customerBatches[i]) {
+          for (const customer of wcCustomers) {
             try {
               await shopify.createCustomer(transformCustomer(customer))
               done++
@@ -330,17 +294,23 @@ export const migrationFunction = inngest.createFunction(
       }
     }
 
-    // Phase 3c: Orders — REST serial batches with adaptive throttle
-    if (entities.orders) {
-      for (let i = 0; i < orderBatches.length; i++) {
-        await step.run(`upload-orders-${i}`, async () => {
+    // ── Phase 4: Orders — fetch + upload per WC page ──────────────────────────
+    // Each step fetches ORDER_PAGE_SIZE orders from WC and uploads them.
+    // - existingOrders (built from Shopify at start) is used to skip already-done orders
+    // - withTimeout caps each order at ORDER_TIMEOUT_MS so no single order can stall
+    // - STEP_BUDGET_MS guard ensures we bail before Vercel's 60s function kill
+    // - Steps return nothing → Inngest stores undefined → O(1) replay forever
+    if (entities.orders && effectiveOrderCount > 0) {
+      const orderPageCount = Math.ceil(effectiveOrderCount / ORDER_PAGE_SIZE)
+      for (let page = 1; page <= orderPageCount; page++) {
+        await step.run(`orders-page-${page}`, async () => {
           if (await isCancelled()) return
           const stepStart = Date.now()
+          const wcOrders = await wc.getOrderPage(page, ORDER_PAGE_SIZE)
           let done = 0
           let failed = 0
           const failedLogs: { entityId: string; message: string }[] = []
-          for (const order of orderBatches[i]) {
-            // Bail early if we're approaching Vercel's 60s function limit
+          for (const order of wcOrders) {
             if (Date.now() - stepStart > STEP_BUDGET_MS) break
             if (existingOrders.has(order.sourceId)) { done++; continue }
             try {
@@ -363,7 +333,7 @@ export const migrationFunction = inngest.createFunction(
     // ── Complete ──────────────────────────────────────────────────────────────
     await step.run('complete', async () => {
       const final = await db.migrationJob.findUnique({ where: { id: jobId }, select: { status: true, failedProducts: true, failedOrders: true, failedCustomers: true } })
-      if (final?.status === 'CANCELLED') return // user stopped it — keep CANCELLED status
+      if (final?.status === 'CANCELLED') return
       const hasFailures =
         (final?.failedProducts ?? 0) + (final?.failedOrders ?? 0) + (final?.failedCustomers ?? 0) > 0
       await db.migrationJob.update({

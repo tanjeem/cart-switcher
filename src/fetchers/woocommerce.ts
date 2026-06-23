@@ -89,6 +89,24 @@ export class WooCommerceFetcher {
     return raw.map(c => this.normalizeCustomer(c as any))
   }
 
+  // Single-page fetchers with explicit page size — used by combined fetch+upload steps
+  // so large order/customer arrays are never stored in Inngest memoization state.
+  async getOrderPage(page: number, pageSize: number): Promise<NormalizedOrder[]> {
+    const res = await this.client.get('/orders', {
+      params: { per_page: pageSize, page, orderby: 'id', order: 'asc' },
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (res.data as any[]).map(o => this.normalizeOrder(o))
+  }
+
+  async getCustomerPage(page: number, pageSize: number): Promise<NormalizedCustomer[]> {
+    const res = await this.client.get('/customers', {
+      params: { per_page: pageSize, page, orderby: 'id', order: 'asc' },
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (res.data as any[]).map(c => this.normalizeCustomer(c))
+  }
+
   private async getPostCount(): Promise<number> {
     try {
       const base = this.creds.url.trim().replace(/\/$/, '').replace(/^(?!https?:\/\/)/, 'https://')
