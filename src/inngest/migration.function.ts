@@ -8,12 +8,19 @@ import type { NormalizedProduct, NormalizedCoupon, NormalizedPost, MigrationEnti
 const UPLOAD_BATCH     = 25   // products per step
 const WC_PAGE_SIZE     = 100
 const CLEANUP_BATCH    = 20
-const ORDER_PAGE_SIZE  = 20   // orders fetched+uploaded per step: 20 × ~900ms = ~18s
-const CUSTOMER_PAGE_SIZE = 25 // customers fetched+uploaded per step: 25 × ~600ms = ~15s
+const ORDER_PAGE_SIZE  = 20   // orders fetched+uploaded per step
+const CUSTOMER_PAGE_SIZE = 25 // customers fetched+uploaded per step
 
-// Vercel maxDuration = 60s. Hard-cap each order so the step body never overruns.
-const ORDER_TIMEOUT_MS = 20_000  // per-order cap (axios is 30s — this fires first)
-const STEP_BUDGET_MS   = 44_000  // bail out of the order loop; leaves ~16s for DB writes
+// Vercel maxDuration = 60s. Budget math:
+//   STEP_BUDGET_MS (25s) guards the loop: don't start next order if >25s elapsed.
+//   ORDER_TIMEOUT_MS (30s) caps the order itself.
+//   Worst case step time: 25s + 30s (last order) + ~3s overhead = 58s < 60s ✓
+//
+// The old 20s timeout was also shorter than the 429 retry ceiling:
+//   8 retries × 3s delay = 24s → timeout always fired first for rate-limited orders.
+//   Now: 3 retries × 1s = 3s max from 429 handling, well within 30s.
+const ORDER_TIMEOUT_MS = 30_000  // per-order cap; was 20s (too short for slow/old orders)
+const STEP_BUDGET_MS   = 25_000  // bail before starting next order if >25s elapsed
 
 const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
   Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timed out after ${ms}ms`)), ms))])
