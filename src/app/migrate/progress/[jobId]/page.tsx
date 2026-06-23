@@ -224,11 +224,36 @@ export default function ProgressPage() {
   const activeDone  = activeField === 'orders' ? (progress?.doneOrders ?? 0)    : (progress?.doneCustomers ?? 0)
   const activeTotal = activeField === 'orders' ? (progress?.totalOrders ?? 0)   : (progress?.totalCustomers ?? 0)
 
+  // Persist the last known rate so ETA/speed stay visible between Inngest steps
+  // (the sliding window returns null when no progress occurs in the sample window,
+  //  e.g. during the 30s gap between step completions)
+  const lastRateRef = useRef<{ field: 'customers' | 'orders'; perSec: number } | null>(null)
+
   let activeEta: string | null = null
   let activeSpeed: string | null = null
   if (progress && isRunning) {
     activeEta   = rollingEta(activeDone, activeTotal, activeField, samples)
     activeSpeed = rollingSpeed(activeField, samples)
+
+    // Update stored rate whenever the window gives us fresh data
+    if (samples.length >= 2) {
+      const oldest = samples[0]
+      const newest = samples.at(-1)!
+      const elapsed = (newest.time - oldest.time) / 1000
+      const delta = newest[activeField] - oldest[activeField]
+      if (delta > 0 && elapsed > 0) {
+        lastRateRef.current = { field: activeField, perSec: delta / elapsed }
+      }
+    }
+
+    // Fallback: use stored rate when the window has delta=0 (step transition pause)
+    if (lastRateRef.current?.field === activeField) {
+      const perSec = lastRateRef.current.perSec
+      if (activeSpeed === null) activeSpeed = `${Math.round(perSec * 60)}/min`
+      if (activeEta === null && activeDone > 0 && activeDone < activeTotal) {
+        activeEta = formatEta((activeTotal - activeDone) / perSec)
+      }
+    }
   }
 
   // Combined progress across products + customers + orders for the header bar
