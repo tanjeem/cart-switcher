@@ -452,17 +452,20 @@ export class ShopifyUploader {
             order: { ...order, phone: null, billing_address: order.billing_address ? { ...(order.billing_address as object), phone: null } : null, shipping_address: order.shipping_address ? { ...(order.shipping_address as object), phone: null } : null },
           })
         } else if (msg.includes('shipping_address')) {
-          // Order has no valid shipping address — retry without it
           await this.client.post('/orders.json', { order: { ...order, shipping_address: null } })
         } else {
           throw err
         }
       }
     }
+    const t0 = Date.now()
     await tryPost(payload)
-    // 700ms between orders ≈ 1.4 req/s, giving 0.6 req/s of headroom above Shopify's 2/s
-    // restore rate so bursts don't cascade into 429s across the whole batch.
-    await sleep(700)
+    // Enforce a minimum 700ms per order to stay under Shopify's 2 req/s limit,
+    // but don't add extra delay when the POST already took longer than 700ms.
+    // Previously sleep(700) was always additive: a 1.5s response + 700ms = 2.2s/order.
+    // Now a 1.5s response skips the sleep entirely → ~1.5s/order, ~40% faster.
+    const elapsed = Date.now() - t0
+    if (elapsed < 700) await sleep(700 - elapsed)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
