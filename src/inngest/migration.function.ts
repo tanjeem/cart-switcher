@@ -208,7 +208,7 @@ export const migrationChunk = inngest.createFunction(
       // if the fetch took too long. Instead, we rely on smaller page sizes to stay within Vercel's limits.
 
       if (type === 'products') {
-        const productPageSize = 5 // Fetch fewer products because variations take a very long time
+        const productPageSize = 2 // Fetch fewer products because variations take a very long time
         items = await wc.getProductPage(page, productPageSize)
         for (const item of items) {
           try {
@@ -289,7 +289,7 @@ export const migrationChunk = inngest.createFunction(
     })
 
     const isDemoLimitHit = isDemo && (page * pageSize >= DEMO_LIMIT)
-    const currentPageSize = type === 'products' ? 5 : pageSize
+    const currentPageSize = type === 'products' ? 2 : pageSize
 
     if (items.length < currentPageSize || isDemoLimitHit) {
       const nextType = getNextType(type, entities)
