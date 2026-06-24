@@ -307,13 +307,21 @@ export class WooCommerceFetcher {
       failed: 'voided',
     }
 
+    let financialStatus = financialMap[o.status] ?? 'pending'
+    
+    // In WooCommerce, COD orders are put into 'processing' state before payment is collected.
+    // If it's processing but hasn't actually been paid (date_paid is null), mark as pending.
+    if (o.status === 'processing' && (!o.date_paid || o.payment_method === 'cod')) {
+      financialStatus = 'pending'
+    }
+
     return {
       sourceId: String(o.id),
       orderNumber: String(o.number),
       email: o.billing?.email ?? '',
       phone: o.billing?.phone,
       note: o.customer_note,
-      financialStatus: financialMap[o.status] ?? 'pending',
+      financialStatus,
       fulfillmentStatus: o.status === 'completed' ? 'fulfilled' : null,
       currency: o.currency,
       totalPrice: o.total,
