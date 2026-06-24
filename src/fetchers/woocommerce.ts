@@ -28,6 +28,14 @@ export class WooCommerceFetcher {
       },
       timeout: 30000,
     })
+
+    this.client.interceptors.request.use(config => {
+      if (config.method?.toLowerCase() === 'get') {
+        config.params = config.params || {}
+        config.params._nocache = Date.now()
+      }
+      return config
+    })
   }
 
   async validate(): Promise<{ ok: boolean; error?: string }> {
