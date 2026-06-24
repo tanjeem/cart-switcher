@@ -197,6 +197,11 @@ export const migrationChunk = inngest.createFunction(
     const existingOrderSet = new Set<string>(existingOrders || [])
     const DEMO_LIMIT = 10
     const pageSize = type === 'orders' ? ORDER_PAGE_SIZE : PAGE_SIZE
+
+    let done = 0
+    let failed = 0
+    const failedLogs: { entityId: string; message: string }[] = []
+
     const itemsLength = await step.run(`process-${type}-page-${page}`, async () => {
       // We removed the strict STEP_BUDGET_MS break because it was causing items to be silently skipped 
       // if the fetch took too long. Instead, we rely on smaller page sizes to stay within Vercel's limits.
