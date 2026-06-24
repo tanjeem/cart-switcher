@@ -6,7 +6,7 @@ import { transformProduct, transformCustomer, transformOrder, transformCoupon, t
 import type { MigrationEntities } from '@/types'
 
 const PAGE_SIZE = 25
-const ORDER_PAGE_SIZE = 22
+const ORDER_PAGE_SIZE = 50
 const CLEANUP_BATCH = 20
 
 const ORDER_TIMEOUT_MS = 30_000
