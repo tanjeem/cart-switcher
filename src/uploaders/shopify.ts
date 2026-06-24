@@ -41,15 +41,15 @@ export class ShopifyUploader {
     }, async (error: any) => {
       if (error.response?.status === 429) {
         const retries = (error.config?._429retries ?? 0) as number
-        // 8 retries × 3s cap = 24s max — fits within ORDER_TIMEOUT_MS (30s).
-        // Fewer retries with shorter delays (e.g. 3 × 1s) caused all rate-limited
-        // orders to fail because 1s wasn't long enough for the bucket to recover
-        // between attempts. Respecting the full retry-after gives the bucket time.
-        // 5 retries × 3s = 15s max — fits two rate-limited orders within the 25s step
-        // budget (vs 8 × 3s = 24s which forced only 1 order per step).
-        if (retries >= 8) throw new Error('Shopify 429: rate limit exceeded after 8 retries')
+        // Exponential backoff: 1s → 2s → 4s → 8s → 8s (capped). Total ≤ 23s < ORDER_TIMEOUT (30s).
+        // Fixed short delays (3s) failed because other apps on this store consume
+        // every refilled token immediately — 3s only restores 6 tokens which competing
+        // apps take before we can retry. The 8s cap gives the bucket a real recovery
+        // window: 8s × 2 tok/s = 16 tokens refilled vs ~14 consumed by others = net +2.
+        if (retries >= 5) throw new Error('Shopify 429: rate limit exceeded after 5 retries')
         const retryAfter = parseInt(error.response.headers['retry-after'] ?? '0', 10)
-        const delayMs = Math.min(3000, retryAfter > 0 ? retryAfter * 1000 : (retries + 1) * 1000)
+        const expBackoff = Math.min(8000, Math.pow(2, retries) * 1000)
+        const delayMs = Math.max(expBackoff, retryAfter > 0 ? retryAfter * 1000 : 0)
         await sleep(delayMs)
         return this.client.request({ ...error.config, _429retries: retries + 1 })
       }
@@ -463,14 +463,13 @@ export class ShopifyUploader {
     }
     const t0 = Date.now()
     await tryPost(payload)
-    // Enforce a minimum 1200ms per order (~0.83 req/s sustained).
-    // Shopify's bucket restores at 2/s — leaving ~1.17 tokens/s of headroom for
-    // other store apps sharing the bucket. At 900ms (1.11 req/s) we observed
-    // consistent 429s on the last 2 orders of every step, meaning competing apps
-    // consumed enough of the shared bucket to deplete it before our step finished.
-    // Each 429 chains into 8 × 3s retries (24s) — preventing them is far faster.
+    // Enforce a minimum 2000ms per order (~0.5 req/s sustained).
+    // Shopify's bucket restores at 2/s — leaving 1.5 tokens/s of headroom for
+    // other apps sharing the bucket. At 1200ms (0.83 req/s) we still saw consistent
+    // 429s because competing apps on this store consume ~1.5+ tokens/s, leaving
+    // insufficient headroom. 2000ms halves our rate and gives the bucket real slack.
     const elapsed = Date.now() - t0
-    if (elapsed < 1200) await sleep(1200 - elapsed)
+    if (elapsed < 2000) await sleep(2000 - elapsed)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
