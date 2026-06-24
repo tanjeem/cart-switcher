@@ -197,19 +197,15 @@ export const migrationChunk = inngest.createFunction(
     const existingOrderSet = new Set<string>(existingOrders || [])
     const DEMO_LIMIT = 10
     const pageSize = type === 'orders' ? ORDER_PAGE_SIZE : PAGE_SIZE
-
-    let items: any[] = []
-    let done = 0
-    let failed = 0
-    const failedLogs: { entityId: string; message: string }[] = []
-
-    await step.run(`process-${type}-page-${page}`, async () => {
+    const itemsLength = await step.run(`process-${type}-page-${page}`, async () => {
       // We removed the strict STEP_BUDGET_MS break because it was causing items to be silently skipped 
       // if the fetch took too long. Instead, we rely on smaller page sizes to stay within Vercel's limits.
+      let fetchedLength = 0
 
       if (type === 'products') {
         const productPageSize = 1 // Fetch 1 product to absolutely guarantee no Vercel timeouts
-        items = await wc.getProductPage(page, productPageSize)
+        const items = await wc.getProductPage(page, productPageSize)
+        fetchedLength = items.length
         for (const item of items) {
           try {
             await shopify.createProduct(transformProduct(item))
@@ -222,7 +218,8 @@ export const migrationChunk = inngest.createFunction(
           }
         }
       } else if (type === 'customers') {
-        items = await wc.getCustomerPage(page, pageSize)
+        const items = await wc.getCustomerPage(page, pageSize)
+        fetchedLength = items.length
         for (const item of items) {
           try { await shopify.createCustomer(transformCustomer(item)); done++ }
           catch (err: unknown) {
@@ -232,7 +229,8 @@ export const migrationChunk = inngest.createFunction(
           }
         }
       } else if (type === 'orders') {
-        items = await wc.getOrderPage(page, pageSize)
+        const items = await wc.getOrderPage(page, pageSize)
+        fetchedLength = items.length
         for (const item of items) {
           try {
             if (!existingOrderSet.has(String(item.sourceId))) {
@@ -246,7 +244,8 @@ export const migrationChunk = inngest.createFunction(
           }
         }
       } else if (type === 'coupons') {
-        items = await wc.getCouponPage(page, pageSize)
+        const items = await wc.getCouponPage(page, pageSize)
+        fetchedLength = items.length
         for (const item of items) {
           try { await shopify.createDiscountCode(transformCoupon(item)); done++ }
           catch (err: unknown) {
@@ -256,7 +255,8 @@ export const migrationChunk = inngest.createFunction(
           }
         }
       } else if (type === 'posts') {
-        items = await wc.getPostPage(page, pageSize)
+        const items = await wc.getPostPage(page, pageSize)
+        fetchedLength = items.length
         for (const item of items) {
           try { await shopify.createArticle(transformPost(item)); done++ }
           catch (err: unknown) {
@@ -286,12 +286,14 @@ export const migrationChunk = inngest.createFunction(
           }))
         )
       }
+      
+      return fetchedLength
     })
 
     const isDemoLimitHit = isDemo && (page * pageSize >= DEMO_LIMIT)
     const currentPageSize = type === 'products' ? 1 : pageSize
 
-    if (items.length < currentPageSize || isDemoLimitHit) {
+    if (itemsLength < currentPageSize || isDemoLimitHit) {
       const nextType = getNextType(type, entities)
       if (nextType === 'complete') {
         await step.sendEvent('trigger-complete', { name: 'migration/complete', data: { jobId, autoRetryCount } })
