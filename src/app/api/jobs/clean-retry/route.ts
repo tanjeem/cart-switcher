@@ -10,31 +10,30 @@ export async function POST(req: Request) {
     const old = await db.migrationJob.findUnique({ where: { id: jobId } })
     if (!old) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
 
-    if (old.status === 'RUNNING' || old.status === 'PENDING') {
-      await db.migrationJob.update({
-        where: { id: jobId },
-        data: { status: 'CANCELLED', completedAt: new Date() },
-      })
-    }
-
-    const newJob = await db.migrationJob.create({
+    const updatedJob = await db.migrationJob.update({
+      where: { id: jobId },
       data: {
-        userId: old.userId,
-        wcUrl: old.wcUrl,
-        wcKey: old.wcKey,
-        wcSecret: old.wcSecret,
-        shopifyDomain: old.shopifyDomain,
-        shopifyAccessToken: old.shopifyAccessToken,
-        isDemo: old.isDemo,
         status: 'PENDING',
+        completedAt: null,
+        errorLog: null,
+        doneProducts: 0,
+        doneOrders: 0,
+        doneCustomers: 0,
+        doneCoupons: 0,
+        donePosts: 0,
+        failedProducts: 0,
+        failedOrders: 0,
+        failedCustomers: 0,
       },
     })
 
+    await db.migrationLog.deleteMany({ where: { jobId } })
+
     // cleanFirst: true tells the migration function to delete all existing
     // Shopify data before importing, giving a clean slate
-    await inngest.send({ name: 'migration/start', data: { jobId: newJob.id, cleanFirst: true, ...(entities ? { entities } : {}) } })
+    await inngest.send({ name: 'migration/start', data: { jobId: updatedJob.id, cleanFirst: true, ...(entities ? { entities } : {}) } })
 
-    return NextResponse.json({ jobId: newJob.id })
+    return NextResponse.json({ jobId: updatedJob.id })
   } catch (err) {
     console.error('[jobs/clean-retry]', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

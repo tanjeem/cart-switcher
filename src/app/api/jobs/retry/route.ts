@@ -10,34 +10,31 @@ export async function POST(req: Request) {
     const old = await db.migrationJob.findUnique({ where: { id: jobId } })
     if (!old) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
 
-    // Cancel the old job before starting the retry so they don't run simultaneously.
-    // Two concurrent jobs for the same store compete for the same Shopify REST bucket
-    // and can create duplicate orders. The migration function checks isCancelled()
-    // between steps, so marking CANCELLED stops it at the next step boundary.
-    if (old.status === 'RUNNING' || old.status === 'PENDING') {
-      await db.migrationJob.update({
-        where: { id: jobId },
-        data: { status: 'CANCELLED', completedAt: new Date() },
-      })
-    }
-
-    // Create a fresh job with the same WooCommerce + Shopify credentials
-    const newJob = await db.migrationJob.create({
+    // Instead of creating a new job, reuse the existing one and reset its state
+    // so the migration function can fast-forward through already completed items
+    const updatedJob = await db.migrationJob.update({
+      where: { id: jobId },
       data: {
-        userId: old.userId,
-        wcUrl: old.wcUrl,
-        wcKey: old.wcKey,
-        wcSecret: old.wcSecret,
-        shopifyDomain: old.shopifyDomain,
-        shopifyAccessToken: old.shopifyAccessToken,
-        isDemo: old.isDemo,
         status: 'PENDING',
+        completedAt: null,
+        errorLog: null,
+        doneProducts: 0,
+        doneOrders: 0,
+        doneCustomers: 0,
+        doneCoupons: 0,
+        donePosts: 0,
+        failedProducts: 0,
+        failedOrders: 0,
+        failedCustomers: 0,
       },
     })
 
-    await inngest.send({ name: 'migration/start', data: { jobId: newJob.id, ...(entities ? { entities } : {}) } })
+    // Delete old logs so they don't pile up across retries
+    await db.migrationLog.deleteMany({ where: { jobId } })
 
-    return NextResponse.json({ jobId: newJob.id })
+    await inngest.send({ name: 'migration/start', data: { jobId: updatedJob.id, ...(entities ? { entities } : {}) } })
+
+    return NextResponse.json({ jobId: updatedJob.id })
   } catch (err) {
     console.error('[jobs/retry]', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
