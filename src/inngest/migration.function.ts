@@ -354,10 +354,38 @@ export const migrationFunction = inngest.createFunction(
 
     // ── Complete ──────────────────────────────────────────────────────────────
     await step.run('complete', async () => {
-      const final = await db.migrationJob.findUnique({ where: { id: jobId }, select: { status: true, failedProducts: true, failedOrders: true, failedCustomers: true } })
+      const final = await db.migrationJob.findUnique({ where: { id: jobId } })
       if (final?.status === 'CANCELLED') return
-      const hasFailures =
-        (final?.failedProducts ?? 0) + (final?.failedOrders ?? 0) + (final?.failedCustomers ?? 0) > 0
+      
+      const expectedTotal = (final?.totalProducts ?? 0) + (final?.totalOrders ?? 0) + (final?.totalCustomers ?? 0)
+      const doneTotal = (final?.doneProducts ?? 0) + (final?.doneOrders ?? 0) + (final?.doneCustomers ?? 0)
+      const failedTotal = (final?.failedProducts ?? 0) + (final?.failedOrders ?? 0) + (final?.failedCustomers ?? 0)
+      
+      const missingTotal = expectedTotal - (doneTotal + failedTotal)
+      const throttledErrors = await db.migrationLog.count({
+        where: { jobId, status: 'failed', message: { contains: 'throttled' } }
+      })
+      
+      const autoRetryCount = event.data.autoRetryCount ?? 0
+      
+      // Auto-retry if we missed items (due to step timeouts) or had rate-limit errors, up to 10 times.
+      if ((missingTotal > 0 || throttledErrors > 0) && autoRetryCount < 10) {
+        await db.migrationJob.update({
+          where: { id: jobId },
+          data: {
+            doneProducts: 0, doneOrders: 0, doneCustomers: 0, doneCoupons: 0, donePosts: 0,
+            failedProducts: 0, failedOrders: 0, failedCustomers: 0,
+          }
+        })
+        await db.migrationLog.deleteMany({ where: { jobId } })
+        await inngest.send({ 
+          name: 'migration/start', 
+          data: { ...event.data, autoRetryCount: autoRetryCount + 1 } 
+        })
+        return
+      }
+
+      const hasFailures = failedTotal > 0
       await db.migrationJob.update({
         where: { id: jobId },
         data: { status: hasFailures ? 'PARTIAL' : 'DONE', completedAt: new Date() },
