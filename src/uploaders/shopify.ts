@@ -232,7 +232,6 @@ export class ShopifyUploader {
         if (attr) existing.add(attr.value)
       }
       path = this.parseNextPath(res.headers['link'] ?? '')
-      if (path) await sleep(500) // don't exhaust REST bucket before order uploads begin
     }
     return existing
   }

@@ -110,14 +110,15 @@ export const migrationFunction = inngest.createFunction(
 
     // ── Phase 0 (optional): Remove CartSwitcher duplicates ────────────────────
     if (cleanFirst) {
-      const [dupProductIds, dupOrderIds] = await Promise.all([
-        entities.products
-          ? step.run('dedup-scan-products', async () => shopify.getCartSwitcherProductDuplicates())
-          : Promise.resolve([]),
-        entities.orders
-          ? step.run('dedup-scan-orders', async () => shopify.getCartSwitcherOrderDuplicates())
-          : Promise.resolve([]),
-      ])
+      // Run sequentially, not in parallel — both hit the Shopify REST bucket.
+      // Parallel execution drains the bucket (40 tokens) twice as fast, triggering
+      // the adaptive throttle on every subsequent page and making each scan 3× slower.
+      const dupProductIds = entities.products
+        ? await step.run('dedup-scan-products', async () => shopify.getCartSwitcherProductDuplicates())
+        : []
+      const dupOrderIds = entities.orders
+        ? await step.run('dedup-scan-orders', async () => shopify.getCartSwitcherOrderDuplicates())
+        : []
 
       const dupProductBatches = chunk(dupProductIds as number[], CLEANUP_BATCH)
       const dupOrderBatches   = chunk(dupOrderIds   as number[], CLEANUP_BATCH)
