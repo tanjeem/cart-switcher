@@ -289,8 +289,9 @@ export const migrationChunk = inngest.createFunction(
     })
 
     const isDemoLimitHit = isDemo && (page * pageSize >= DEMO_LIMIT)
+    const currentPageSize = type === 'products' ? 5 : pageSize
 
-    if (items.length < pageSize || isDemoLimitHit) {
+    if (items.length < currentPageSize || isDemoLimitHit) {
       const nextType = getNextType(type, entities)
       if (nextType === 'complete') {
         await step.sendEvent('trigger-complete', { name: 'migration/complete', data: { jobId, autoRetryCount } })
