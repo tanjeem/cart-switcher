@@ -204,12 +204,13 @@ export const migrationChunk = inngest.createFunction(
     const failedLogs: { entityId: string; message: string }[] = []
 
     await step.run(`process-${type}-page-${page}`, async () => {
-      const stepStart = Date.now()
+      // We removed the strict STEP_BUDGET_MS break because it was causing items to be silently skipped 
+      // if the fetch took too long. Instead, we rely on smaller page sizes to stay within Vercel's limits.
 
       if (type === 'products') {
-        items = await wc.getProductPage(page, pageSize)
+        const productPageSize = 5 // Fetch fewer products because variations take a very long time
+        items = await wc.getProductPage(page, productPageSize)
         for (const item of items) {
-          if (Date.now() - stepStart > STEP_BUDGET_MS) break
           try {
             await shopify.createProduct(transformProduct(item))
             done++
@@ -223,7 +224,6 @@ export const migrationChunk = inngest.createFunction(
       } else if (type === 'customers') {
         items = await wc.getCustomerPage(page, pageSize)
         for (const item of items) {
-          if (Date.now() - stepStart > STEP_BUDGET_MS) break
           try { await shopify.createCustomer(transformCustomer(item)); done++ }
           catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err)
@@ -234,11 +234,11 @@ export const migrationChunk = inngest.createFunction(
       } else if (type === 'orders') {
         items = await wc.getOrderPage(page, pageSize)
         for (const item of items) {
-          if (Date.now() - stepStart > STEP_BUDGET_MS) break
-          if (existingOrderSet.has(String(item.sourceId))) continue
           try {
-            await withTimeout(shopify.createOrder(transformOrder(item)), ORDER_TIMEOUT_MS)
-            done++
+            if (!existingOrderSet.has(String(item.sourceId))) {
+              await withTimeout(shopify.createOrder(transformOrder(item)), ORDER_TIMEOUT_MS)
+              done++
+            }
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err)
             failedLogs.push({ entityId: String(item.sourceId), message: msg })
@@ -248,7 +248,6 @@ export const migrationChunk = inngest.createFunction(
       } else if (type === 'coupons') {
         items = await wc.getCouponPage(page, pageSize)
         for (const item of items) {
-          if (Date.now() - stepStart > STEP_BUDGET_MS) break
           try { await shopify.createDiscountCode(transformCoupon(item)); done++ }
           catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err)
@@ -259,7 +258,6 @@ export const migrationChunk = inngest.createFunction(
       } else if (type === 'posts') {
         items = await wc.getPostPage(page, pageSize)
         for (const item of items) {
-          if (Date.now() - stepStart > STEP_BUDGET_MS) break
           try { await shopify.createArticle(transformPost(item)); done++ }
           catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err)
@@ -268,6 +266,7 @@ export const migrationChunk = inngest.createFunction(
           }
         }
       }
+    })
 
       if (done > 0 || failed > 0) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
