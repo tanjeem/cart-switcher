@@ -462,13 +462,11 @@ export class ShopifyUploader {
     }
     const t0 = Date.now()
     await tryPost(payload)
-    // Enforce a minimum 2000ms per order (~0.5 req/s sustained).
-    // Shopify's bucket restores at 2/s — leaving 1.5 tokens/s of headroom for
-    // other apps sharing the bucket. At 1200ms (0.83 req/s) we still saw consistent
-    // 429s because competing apps on this store consume ~1.5+ tokens/s, leaving
-    // insufficient headroom. 2000ms halves our rate and gives the bucket real slack.
+    // Enforce a minimum 800ms per order (~0.83 req/s sustained, leaving 1.17/s
+    // headroom for Flow by Shopify automation calls triggered on order creation).
+    // Exponential backoff handles occasional 429s when the bucket dips unexpectedly.
     const elapsed = Date.now() - t0
-    if (elapsed < 2000) await sleep(2000 - elapsed)
+    if (elapsed < 800) await sleep(800 - elapsed)
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

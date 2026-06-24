@@ -8,7 +8,7 @@ import type { NormalizedProduct, NormalizedCoupon, NormalizedPost, MigrationEnti
 const UPLOAD_BATCH     = 25   // products per step
 const WC_PAGE_SIZE     = 100
 const CLEANUP_BATCH    = 20
-const ORDER_PAGE_SIZE  = 12   // orders fetched+uploaded per step (2000ms sleep × 12 = 24s + ~2s WC fetch ≤ 25s budget)
+const ORDER_PAGE_SIZE  = 22   // orders fetched+uploaded per step (800ms sleep × 22 = 17.6s + ~2s WC fetch ≤ 25s budget)
 const CUSTOMER_PAGE_SIZE = 25 // customers fetched+uploaded per step
 
 // Vercel maxDuration = 60s. Budget math:
