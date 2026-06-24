@@ -266,7 +266,6 @@ export const migrationChunk = inngest.createFunction(
           }
         }
       }
-    })
 
       if (done > 0 || failed > 0) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
