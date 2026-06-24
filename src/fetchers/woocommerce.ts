@@ -13,8 +13,10 @@ const PAGE_SIZE = 100
 
 export class WooCommerceFetcher {
   private client: AxiosInstance
+  private creds: WCCredentials
 
-  constructor(private creds: WCCredentials) {
+  constructor(creds: WCCredentials) {
+    this.creds = creds
     const normalizedUrl = creds.url
       .trim()
       .replace(/\/$/, '')
@@ -22,16 +24,15 @@ export class WooCommerceFetcher {
 
     this.client = axios.create({
       baseURL: `${normalizedUrl}/wp-json/wc/v3`,
-      auth: {
-        username: creds.consumerKey,
-        password: creds.consumerSecret,
-      },
       timeout: 30000,
     })
 
     this.client.interceptors.request.use(config => {
+      config.params = config.params || {}
+      config.params.consumer_key = this.creds.consumerKey
+      config.params.consumer_secret = this.creds.consumerSecret
+      
       if (config.method?.toLowerCase() === 'get') {
-        config.params = config.params || {}
         config.params._nocache = Date.now()
       }
       return config
