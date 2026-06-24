@@ -56,6 +56,7 @@ export const migrationStart = inngest.createFunction(
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async ({ event, step }: { event: any; step: any }) => {
+    console.log('[MIGRATION_START] EVENT RECEIVED:', event.data.jobId)
     const { jobId, cleanFirst, entities: rawEntities, autoRetryCount = 0 } = event.data
 
     const entities: MigrationEntities = {

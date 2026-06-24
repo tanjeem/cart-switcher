@@ -1,0 +1,24 @@
+
+> cart-switcher@0.1.0 dev
+> next dev
+
+⚠ Port 3000 is in use by process 90560, using available port 3001 instead.
+▲ Next.js 16.2.9 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://192.168.50.237:3001
+- Environments: .env.local
+✓ Ready in 575ms
+
+Attention: Clerk collects telemetry data from its SDKs when connected to development instances.
+The data collected is used to inform Clerk's product roadmap.
+To learn more, including how to opt-out from the telemetry program, visit: https://clerk.com/docs/telemetry.
+
+Signature validation failed
+Error: No x-inngest-signature provided
+    at ignore-listed frames
+{ method: 'GET' }
+ GET /api/inngest 401 in 933ms (next.js: 554ms, proxy.ts: 187ms, application-code: 192ms)
+ GET /sign-in?redirect_url=http%3A%2F%2Flocalhost%3A3001%2Fx%2Finngest 200 in 721ms (next.js: 510ms, proxy.ts: 4ms, application-code: 208ms)
+ GET /sign-in?redirect_url=http%3A%2F%2Flocalhost%3A3001%2F.netlify%2Ffunctions%2Finngest 200 in 44ms (next.js: 7ms, proxy.ts: 4ms, application-code: 33ms)
+ GET /sign-in?redirect_url=http%3A%2F%2Flocalhost%3A3001%2F.redwood%2Ffunctions%2Finngest 200 in 40ms (next.js: 4ms, proxy.ts: 5ms, application-code: 32ms)
+[?25h
