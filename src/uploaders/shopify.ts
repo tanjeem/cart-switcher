@@ -6,10 +6,34 @@ const SHOPIFY_API_VERSION = '2024-10'
 // GraphQL customers: ~5 mutations/s vs REST's 2 req/s.
 const USE_GRAPHQL = true
 
+// GraphQL orders: uses the GraphQL bucket (1000 pts / 50 pts/s restore) instead of
+// the REST bucket (40 tokens / 2 tokens/s), so Flow's REST calls don't compete.
+// Requires an offline access token — detected at runtime via canUseGraphQLOrders().
+// Set to false to force REST (e.g. for debugging or rollback).
+export const USE_GQL_ORDERS = true
+
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export class ShopifyUploader {
   private client: AxiosInstance
+  private gqlOrders = false
+
+  enableGqlOrders() { this.gqlOrders = true }
+
+  /** Probe whether this token supports GraphQL orderCreate (requires offline token).
+   *  An online token returns HTTP 403; an offline token returns userErrors for empty input. */
+  async canUseGraphQLOrders(): Promise<boolean> {
+    try {
+      await this.gql(`mutation { orderCreate(order: { lineItems: [] }) { userErrors { message } } }`)
+      return true
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (msg.includes('403') || msg.toLowerCase().includes('access') || msg.toLowerCase().includes('offline')) {
+        return false
+      }
+      return true
+    }
+  }
 
   constructor(private creds: ShopifyCredentials) {
     const domain = creds.domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
@@ -439,7 +463,111 @@ export class ShopifyUploader {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async createOrder(payload: any): Promise<void> {
-    return this.createOrderRest(payload)
+    return this.gqlOrders ? this.createOrderGql(payload) : this.createOrderRest(payload)
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private restAddrToGql(a: any) {
+    if (!a) return null
+    return {
+      firstName: a.first_name ?? '',
+      lastName: a.last_name ?? '',
+      address1: a.address1 ?? '',
+      address2: a.address2 || null,
+      city: a.city ?? '',
+      province: a.province || null,
+      zip: a.zip ?? '',
+      country: a.country ?? '',
+      phone: a.phone || null,
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private buildOrderGqlInput(payload: any, withPhone = true): Record<string, unknown> {
+    return {
+      email: payload.email,
+      phone: withPhone ? (payload.phone || null) : null,
+      financialStatus: (payload.financial_status ?? 'pending').toUpperCase(),
+      ...(payload.fulfillment_status ? { fulfillmentStatus: payload.fulfillment_status.toUpperCase() } : {}),
+      note: payload.note || null,
+      processedAt: payload.processed_at ?? payload.created_at,
+      tags: (() => {
+        if (!payload.tags) return []
+        if (typeof payload.tags === 'string') return payload.tags.split(',').map((t: string) => t.trim()).filter(Boolean)
+        return payload.tags
+      })(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      lineItems: (payload.line_items ?? []).map((li: any) => ({
+        title: li.title,
+        ...(li.variant_title ? { variantTitle: li.variant_title } : {}),
+        ...(li.sku ? { sku: li.sku } : {}),
+        quantity: li.quantity ?? 1,
+        priceSet: { shopMoney: { amount: String(li.price ?? '0.00'), currencyCode: payload.currency ?? 'USD' } },
+        taxable: li.taxable ?? true,
+        requiresShipping: li.requires_shipping ?? true,
+      })),
+      shippingAddress: this.restAddrToGql(
+        withPhone || !payload.shipping_address
+          ? payload.shipping_address
+          : { ...payload.shipping_address, phone: null }
+      ),
+      billingAddress: this.restAddrToGql(
+        withPhone || !payload.billing_address
+          ? payload.billing_address
+          : { ...payload.billing_address, phone: null }
+      ),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      customAttributes: (payload.note_attributes ?? []).map((a: any) => ({ key: a.name, value: String(a.value) })),
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private async createOrderGql(payload: any): Promise<void> {
+    const MUTATION = `
+      mutation orderCreate($order: OrderCreateOrderInput!, $options: OrderCreateOptionsInput) {
+        orderCreate(order: $order, options: $options) {
+          order { id }
+          userErrors { field message }
+        }
+      }`
+    const options = { inventoryBehaviour: 'BYPASS', sendReceipt: false, sendFulfillmentReceipt: false }
+
+    const tryCreate = async (order: Record<string, unknown>, attempt = 0): Promise<void> => {
+      const data = await this.gql(MUTATION, { order, options })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const errors: { field: string[]; message: string }[] = data.orderCreate?.userErrors ?? []
+      if (!errors.length) return
+
+      const isThrottled = errors.some(e =>
+        e.message?.toLowerCase().includes('too many') || e.message?.toLowerCase().includes('throttled')
+      )
+      if (isThrottled) {
+        if (attempt >= 5) throw new Error(`GraphQL orderCreate throttled after ${attempt + 1} attempts`)
+        await sleep(Math.min(8000, Math.pow(2, attempt) * 1000))
+        return tryCreate(order, attempt + 1)
+      }
+
+      const isPhoneError = errors.some(e =>
+        e.field?.some(f => f.toLowerCase().includes('phone')) || e.message?.toLowerCase().includes('phone')
+      )
+      if (isPhoneError && attempt === 0) {
+        return tryCreate(this.buildOrderGqlInput(payload, false), 1)
+      }
+
+      const isShippingError = errors.some(e =>
+        e.field?.some(f => f.toLowerCase().includes('shipping')) || e.message?.toLowerCase().includes('shipping')
+      )
+      if (isShippingError && attempt === 0) {
+        const noShipping = this.buildOrderGqlInput(payload)
+        ;(noShipping as any).shippingAddress = null
+        return tryCreate(noShipping, 1)
+      }
+
+      throw new Error(errors.map(e => e.message).join('; '))
+    }
+
+    await tryCreate(this.buildOrderGqlInput(payload))
+    // No fixed sleep needed — gql() applies adaptive throttling from cost extensions.
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

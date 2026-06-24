@@ -1,7 +1,7 @@
 import { inngest } from './client'
 import { db } from '@/lib/db'
 import { WooCommerceFetcher } from '@/fetchers/woocommerce'
-import { ShopifyUploader } from '@/uploaders/shopify'
+import { ShopifyUploader, USE_GQL_ORDERS } from '@/uploaders/shopify'
 import { transformProduct, transformCustomer, transformOrder, transformCoupon, transformPost } from '@/transformers'
 import type { NormalizedProduct, NormalizedCoupon, NormalizedPost, MigrationEntities } from '@/types'
 
@@ -107,6 +107,15 @@ export const migrationFunction = inngest.createFunction(
       return ok
     })
     if (!credentialsOk) return
+
+    // ── GraphQL order detection ───────────────────────────────────────────────
+    // Probe whether this token supports GraphQL orderCreate (requires offline token).
+    // Memoized by Inngest so replays return the cached boolean instantly.
+    // To force REST instead, set USE_GQL_ORDERS = false in shopify.ts.
+    if (USE_GQL_ORDERS && entities.orders) {
+      const gqlOk = await step.run('detect-order-api', () => shopify.canUseGraphQLOrders())
+      if (gqlOk) shopify.enableGqlOrders()
+    }
 
     // ── Phase 0 (optional): Remove CartSwitcher duplicates ────────────────────
     if (cleanFirst) {
