@@ -178,39 +178,43 @@ export const migrationFunction = inngest.createFunction(
             await db.migrationJob.update({ where: { id: jobId }, data: { totalProducts: items.length } })
             return items
           })
-        : step.run('skip-products', async () => {
-            await db.migrationJob.update({ where: { id: jobId }, data: { totalProducts: 0 } })
-            return []
-          }),
+        : step.run('skip-products', async () => []),
       entities.coupons
         ? step.run('fetch-coupons', async () => {
             const items = await wc.getAllCoupons(isDemo ? DEMO_LIMIT : undefined)
             await db.migrationJob.update({ where: { id: jobId }, data: { totalCoupons: items.length } })
             return items
           })
-        : step.run('skip-coupons', async () => {
-            await db.migrationJob.update({ where: { id: jobId }, data: { totalCoupons: 0 } })
-            return []
-          }),
+        : step.run('skip-coupons', async () => []),
       entities.posts
         ? step.run('fetch-posts', async () => {
             const items = await wc.getAllPosts(isDemo ? DEMO_LIMIT : undefined)
             await db.migrationJob.update({ where: { id: jobId }, data: { totalPosts: items.length } })
             return items
           })
-        : step.run('skip-posts', async () => {
-            await db.migrationJob.update({ where: { id: jobId }, data: { totalPosts: 0 } })
-            return []
-          }),
+        : step.run('skip-posts', async () => []),
     ])
 
     const effectiveOrderCount    = entities.orders    ? (isDemo ? Math.min(DEMO_LIMIT, orderCount    as number) : (orderCount    as number)) : 0
     const effectiveCustomerCount = entities.customers ? (isDemo ? Math.min(DEMO_LIMIT, customerCount as number) : (customerCount as number)) : 0
 
-    await db.migrationJob.update({
-      where: { id: jobId },
-      data: { totalOrders: effectiveOrderCount, totalCustomers: effectiveCustomerCount },
-    })
+    // Only update totals for entities we are actively processing.
+    // For orders, we also pre-fill doneOrders with the existing snapshot length so the UI
+    // progress bar doesn't drop to 0% while it fast-forwards during a retry.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updateTotals: any = {}
+    if (entities.orders) {
+      updateTotals.totalOrders = effectiveOrderCount
+      updateTotals.doneOrders = (existingOrderIdsArr as string[]).length
+    }
+    if (entities.customers) updateTotals.totalCustomers = effectiveCustomerCount
+
+    if (Object.keys(updateTotals).length > 0) {
+      await db.migrationJob.update({
+        where: { id: jobId },
+        data: updateTotals,
+      })
+    }
 
     // Existing orders set is small (just string IDs) — safe to keep in Inngest state
     const existingOrders = new Set<string>(existingOrderIdsArr as string[])
@@ -334,7 +338,8 @@ export const migrationFunction = inngest.createFunction(
           const failedLogs: { entityId: string; message: string }[] = []
           for (const order of wcOrders) {
             if (Date.now() - stepStart > STEP_BUDGET_MS) break
-            if (existingOrders.has(order.sourceId)) { done++; continue }
+            // We pre-filled doneOrders with the existing length in Phase 1, so we do NOT increment done here.
+            if (existingOrders.has(order.sourceId)) { continue }
             try {
               await withTimeout(shopify.createOrder(transformOrder(order)), ORDER_TIMEOUT_MS)
               done++
@@ -357,35 +362,54 @@ export const migrationFunction = inngest.createFunction(
       const final = await db.migrationJob.findUnique({ where: { id: jobId } })
       if (final?.status === 'CANCELLED') return
       
-      const expectedTotal = (final?.totalProducts ?? 0) + (final?.totalOrders ?? 0) + (final?.totalCustomers ?? 0)
-      const doneTotal = (final?.doneProducts ?? 0) + (final?.doneOrders ?? 0) + (final?.doneCustomers ?? 0)
-      const failedTotal = (final?.failedProducts ?? 0) + (final?.failedOrders ?? 0) + (final?.failedCustomers ?? 0)
+      const pMiss = (final?.totalProducts ?? 0) - ((final?.doneProducts ?? 0) + (final?.failedProducts ?? 0))
+      const cMiss = (final?.totalCustomers ?? 0) - ((final?.doneCustomers ?? 0) + (final?.failedCustomers ?? 0))
+      const oMiss = (final?.totalOrders ?? 0) - ((final?.doneOrders ?? 0) + (final?.failedOrders ?? 0))
       
-      const missingTotal = expectedTotal - (doneTotal + failedTotal)
-      const throttledErrors = await db.migrationLog.count({
-        where: { jobId, status: 'failed', message: { contains: 'throttled' } }
-      })
+      const pThrottled = await db.migrationLog.count({ where: { jobId, entity: 'product', status: 'failed', message: { contains: 'throttled' } } })
+      const cThrottled = await db.migrationLog.count({ where: { jobId, entity: 'customer', status: 'failed', message: { contains: 'throttled' } } })
+      const oThrottled = await db.migrationLog.count({ where: { jobId, entity: 'order', status: 'failed', message: { contains: 'throttled' } } })
+      
+      const retryP = pMiss > 0 || pThrottled > 0
+      const retryC = cMiss > 0 || cThrottled > 0
+      const retryO = oMiss > 0 || oThrottled > 0
       
       const autoRetryCount = event.data.autoRetryCount ?? 0
       
-      // Auto-retry if we missed items (due to step timeouts) or had rate-limit errors, up to 10 times.
-      if ((missingTotal > 0 || throttledErrors > 0) && autoRetryCount < 10) {
-        await db.migrationJob.update({
-          where: { id: jobId },
-          data: {
-            doneProducts: 0, doneOrders: 0, doneCustomers: 0, doneCoupons: 0, donePosts: 0,
-            failedProducts: 0, failedOrders: 0, failedCustomers: 0,
-          }
-        })
-        await db.migrationLog.deleteMany({ where: { jobId } })
+      // Selectively auto-retry only the entities that missed items or got throttled.
+      if ((retryP || retryC || retryO) && autoRetryCount < 10) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const resetData: any = {}
+        if (retryP) { resetData.doneProducts = 0; resetData.failedProducts = 0 }
+        if (retryC) { resetData.doneCustomers = 0; resetData.failedCustomers = 0 }
+        if (retryO) { resetData.doneOrders = 0; resetData.failedOrders = 0 }
+
+        await db.migrationJob.update({ where: { id: jobId }, data: resetData })
+        
+        if (retryP) await db.migrationLog.deleteMany({ where: { jobId, entity: 'product' } })
+        if (retryC) await db.migrationLog.deleteMany({ where: { jobId, entity: 'customer' } })
+        if (retryO) await db.migrationLog.deleteMany({ where: { jobId, entity: 'order' } })
+
         await inngest.send({ 
           name: 'migration/start', 
-          data: { ...event.data, autoRetryCount: autoRetryCount + 1 } 
+          data: { 
+            ...event.data, 
+            autoRetryCount: autoRetryCount + 1,
+            entities: {
+              products: retryP,
+              customers: retryC,
+              orders: retryO,
+              coupons: false,
+              posts: false
+            }
+          } 
         })
         return
       }
 
+      const failedTotal = (final?.failedProducts ?? 0) + (final?.failedOrders ?? 0) + (final?.failedCustomers ?? 0)
       const hasFailures = failedTotal > 0
+      
       await db.migrationJob.update({
         where: { id: jobId },
         data: { status: hasFailures ? 'PARTIAL' : 'DONE', completedAt: new Date() },
