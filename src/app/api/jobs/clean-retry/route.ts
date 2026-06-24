@@ -10,6 +10,13 @@ export async function POST(req: Request) {
     const old = await db.migrationJob.findUnique({ where: { id: jobId } })
     if (!old) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
 
+    if (old.status === 'RUNNING' || old.status === 'PENDING') {
+      await db.migrationJob.update({
+        where: { id: jobId },
+        data: { status: 'CANCELLED', completedAt: new Date() },
+      })
+    }
+
     const newJob = await db.migrationJob.create({
       data: {
         userId: old.userId,

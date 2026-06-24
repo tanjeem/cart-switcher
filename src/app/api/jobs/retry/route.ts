@@ -10,6 +10,17 @@ export async function POST(req: Request) {
     const old = await db.migrationJob.findUnique({ where: { id: jobId } })
     if (!old) return NextResponse.json({ error: 'Job not found' }, { status: 404 })
 
+    // Cancel the old job before starting the retry so they don't run simultaneously.
+    // Two concurrent jobs for the same store compete for the same Shopify REST bucket
+    // and can create duplicate orders. The migration function checks isCancelled()
+    // between steps, so marking CANCELLED stops it at the next step boundary.
+    if (old.status === 'RUNNING' || old.status === 'PENDING') {
+      await db.migrationJob.update({
+        where: { id: jobId },
+        data: { status: 'CANCELLED', completedAt: new Date() },
+      })
+    }
+
     // Create a fresh job with the same WooCommerce + Shopify credentials
     const newJob = await db.migrationJob.create({
       data: {
