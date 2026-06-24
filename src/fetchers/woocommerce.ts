@@ -107,6 +107,44 @@ export class WooCommerceFetcher {
     return (res.data as any[]).map(c => this.normalizeCustomer(c))
   }
 
+  async getProductPage(page: number, pageSize: number): Promise<NormalizedProduct[]> {
+    const res = await this.client.get('/products', {
+      params: { per_page: pageSize, page, orderby: 'id', order: 'asc' },
+    })
+    const withVariations = await Promise.all(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (res.data as any[]).map(async (p: any) => {
+        if (p.type === 'variable' && p.variations?.length > 0) {
+          try {
+            const vres = await this.client.get(`/products/${p.id}/variations`, { params: { per_page: 100 } })
+            return { ...p, _variationDetails: vres.data }
+          } catch {
+            return p
+          }
+        }
+        return p
+      })
+    )
+    return withVariations.map(p => this.normalizeProduct(p))
+  }
+
+  async getCouponPage(page: number, pageSize: number): Promise<NormalizedCoupon[]> {
+    const res = await this.client.get('/coupons', {
+      params: { per_page: pageSize, page, orderby: 'id', order: 'asc' },
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (res.data as any[]).map(c => this.normalizeCoupon(c))
+  }
+
+  async getPostPage(page: number, pageSize: number): Promise<NormalizedPost[]> {
+    const base = this.creds.url.trim().replace(/\/$/, '').replace(/^(?!https?:\/\/)/, 'https://') + '/wp-json'
+    const res = await axios.get(`${base}/wp/v2/posts`, {
+      params: { per_page: pageSize, page },
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (res.data as any[]).map(p => this.normalizePost(p))
+  }
+
   private async getPostCount(): Promise<number> {
     try {
       const base = this.creds.url.trim().replace(/\/$/, '').replace(/^(?!https?:\/\/)/, 'https://')
