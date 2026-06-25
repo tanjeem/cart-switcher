@@ -27,6 +27,8 @@ model MigrationJob {
 
   // Target (Shopify)
   shopifyDomain      String
+  shopifyClientId    String?
+  shopifyClientSecret String?
   shopifyAccessToken String
 
   status    JobStatus @default(PENDING)

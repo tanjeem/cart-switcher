@@ -25,6 +25,8 @@ function ConnectForm() {
 
   const [wc, setWc] = useState({ url: '', consumerKey: '', consumerSecret: '' })
   const [shopDomain, setShopDomain] = useState('')
+  const [shopifyClientId, setShopifyClientId] = useState('')
+  const [shopifyClientSecret, setShopifyClientSecret] = useState('')
   const [counts, setCounts] = useState<Record<string, number> | null>(null)
   const [entities, setEntities] = useState<MigrationEntities>(ALL_ON)
 
@@ -60,11 +62,13 @@ function ConnectForm() {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch('/api/shopify/oauth', {
+      const res = await fetch('/api/jobs/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          shop: shopDomain,
+          shopifyDomain: shopDomain,
+          shopifyClientId,
+          shopifyClientSecret,
           wcUrl: wc.url,
           wcKey: wc.consumerKey,
           wcSecret: wc.consumerSecret,
@@ -74,7 +78,7 @@ function ConnectForm() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      globalThis.location.href = data.authUrl
+      globalThis.location.href = `/migrate/progress/${data.jobId}`
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to connect Shopify')
       setLoading(false)
@@ -220,13 +224,26 @@ function ConnectForm() {
                 value={shopDomain}
                 onChange={setShopDomain}
               />
+              <Field
+                label="Client ID"
+                placeholder="API Key"
+                value={shopifyClientId}
+                onChange={setShopifyClientId}
+              />
+              <Field
+                label="Client Secret"
+                placeholder="API Secret Key"
+                value={shopifyClientSecret}
+                onChange={setShopifyClientSecret}
+                type="password"
+              />
               <p className="text-xs text-gray-400">
-                You will be redirected to Shopify to approve the connection.
+                Create an app in your Shopify Partner Dashboard and enter the Client ID and Secret above.
               </p>
               {error && <p className="text-red-500 text-sm">{error}</p>}
               <button
                 onClick={connectShopify}
-                disabled={loading || !shopDomain}
+                disabled={loading || !shopDomain || !shopifyClientId || !shopifyClientSecret}
                 className="w-full bg-[#96bf48] text-white py-2.5 rounded-lg font-medium disabled:opacity-50 hover:bg-[#7da33a] transition-colors"
               >
                 {loading ? 'Redirecting to Shopify...' : 'Connect with Shopify →'}
