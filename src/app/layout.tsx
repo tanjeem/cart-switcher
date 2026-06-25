@@ -1,9 +1,12 @@
 import type { Metadata } from 'next'
 import { ClerkProvider } from '@clerk/nextjs'
-import { Geist } from 'next/font/google'
+import { Inter } from 'next/font/google'
 import './globals.css'
 
-const geist = Geist({ subsets: ['latin'] })
+const inter = Inter({ 
+  subsets: ['latin'],
+  variable: '--font-inter',
+})
 
 export const metadata: Metadata = {
   title: 'CartSwitcher — Migrate your store to Shopify',
@@ -14,7 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <ClerkProvider>
       <html lang="en">
-        <body className={`${geist.className} bg-gray-50 text-gray-900 antialiased`}>
+        <body className={`${inter.variable} font-sans bg-wise-canvas-soft text-wise-body antialiased`}>
           {children}
         </body>
       </html>
