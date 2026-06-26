@@ -54,8 +54,11 @@ export async function GET(
           return
         }
 
-        const errorCount = (job.failedProducts ?? 0) + (job.failedOrders ?? 0) + (job.failedCustomers ?? 0)
-        send({ ...job, errorCount, logs })
+        const failedProducts  = job.failedProducts  ?? 0
+        const failedOrders    = job.failedOrders    ?? 0
+        const failedCustomers = job.failedCustomers ?? 0
+        const errorCount = failedProducts + failedOrders + failedCustomers
+        send({ ...job, errorCount, failedProducts, failedOrders, failedCustomers, logs })
 
         if (job.status === 'DONE' || job.status === 'FAILED' || job.status === 'PARTIAL' || job.status === 'CANCELLED') {
           controller.close()
