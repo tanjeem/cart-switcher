@@ -9,20 +9,21 @@ const G = '#96bf48'
 const GD = '#4a7a10'
 const GL = '#eef7e0'
 
+// Times based on observed ~120 orders/min throughput from real jobs
 const PRODUCT_BANDS = [
-  { label: 'Under 500',      value: 250,   time: 8  },
-  { label: '500 – 2,000',    value: 1000,  time: 18 },
-  { label: '2,000 – 5,000',  value: 3500,  time: 32 },
-  { label: '5,000 – 15,000', value: 10000, time: 52 },
-  { label: '15,000+',        value: 25000, time: 85 },
+  { label: 'Under 500',      value: 250,   time: 5  },
+  { label: '500 – 2,000',    value: 1000,  time: 12 },
+  { label: '2,000 – 5,000',  value: 3500,  time: 30 },
+  { label: '5,000 – 15,000', value: 10000, time: 60 },
+  { label: '15,000+',        value: 25000, time: 120 },
 ]
 
 const ORDER_BANDS = [
-  { label: 'Under 1,000',    value: 500,   time: 4  },
-  { label: '1,000 – 5,000',  value: 2500,  time: 10 },
-  { label: '5,000 – 20,000', value: 12500, time: 22 },
-  { label: '20,000 – 50,000',value: 35000, time: 40 },
-  { label: '50,000+',        value: 75000, time: 65 },
+  { label: 'Under 1,000',    value: 500,   time: 5  },
+  { label: '1,000 – 5,000',  value: 2500,  time: 22 },
+  { label: '5,000 – 20,000', value: 12500, time: 100 },
+  { label: '20,000 – 50,000',value: 35000, time: 280 },
+  { label: '50,000+',        value: 75000, time: 600 },
 ]
 
 type BandIdx = 0 | 1 | 2 | 3 | 4
@@ -84,16 +85,24 @@ export function MigrationCalculator() {
 
   const result = useMemo(() => {
     let mins = PRODUCT_BANDS[products].time + ORDER_BANDS[orders].time
-    if (hasCustomers) mins += Math.round(PRODUCT_BANDS[products].value / 500)
+    // Customers at similar rate to orders (~120/min)
+    if (hasCustomers) mins += Math.round(ORDER_BANDS[orders].value / 120)
     if (hasCoupons)   mins += 3
     if (hasBlog)      mins += 5
-    const low  = Math.max(10, Math.round(mins * 0.8))
+    const low  = Math.max(3, Math.round(mins * 0.8))
     const high = Math.round(mins * 1.25)
     const plan = recommendedPlan(PRODUCT_BANDS[products].value)
     return { low, high, plan, totalRecords: PRODUCT_BANDS[products].value + ORDER_BANDS[orders].value }
   }, [products, orders, hasCoupons, hasBlog, hasCustomers])
 
-  const pct = Math.min(100, Math.round(((result.low + result.high) / 2) / 120 * 100))
+  function fmtTime(mins: number) {
+    if (mins < 60) return `${mins}m`
+    const h = Math.floor(mins / 60), m = mins % 60
+    return m > 0 ? `${h}h ${m}m` : `${h}h`
+  }
+
+  // max possible: 120 products + 600 orders + customers ≈ ~750 min
+  const pct = Math.min(100, Math.round(((result.low + result.high) / 2) / 750 * 100))
 
   return (
     <section className="py-28 border-t border-gray-100 bg-[#fafaf9]">
@@ -171,9 +180,8 @@ export function MigrationCalculator() {
                     className="flex items-baseline gap-2 mb-2">
                     <Clock className="w-5 h-5 mb-1 flex-shrink-0" style={{ color: G }} />
                     <span className="text-[44px] font-black text-gray-900 tracking-tighter leading-none">
-                      {result.low}–{result.high}
+                      {fmtTime(result.low)}–{fmtTime(result.high)}
                     </span>
-                    <span className="text-gray-400 text-base font-semibold">min</span>
                   </motion.div>
                 </AnimatePresence>
 
