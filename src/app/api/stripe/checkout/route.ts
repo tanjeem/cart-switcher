@@ -4,10 +4,15 @@ import Stripe from 'stripe'
 import { db } from '@/lib/db'
 import { PLANS, type PlanKey } from '@/lib/plans'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2026-05-27.dahlia' })
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
 
 export async function POST(req: Request) {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    return NextResponse.json({ error: 'Payment not configured yet' }, { status: 503 })
+  }
+
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2026-05-27.dahlia' })
+
   const { userId } = await auth()
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -15,13 +20,11 @@ export async function POST(req: Request) {
   const planConfig = PLANS[plan]
   if (!planConfig) return NextResponse.json({ error: 'Invalid plan' }, { status: 400 })
 
-  // Ensure user row exists
   let user = await db.user.findUnique({ where: { clerkId: userId } })
   if (!user) {
     user = await db.user.create({ data: { clerkId: userId, email: `${userId}@pending.cartswitcher.com` } })
   }
 
-  // Create or reuse Stripe customer
   let customerId = user.stripeCustomerId ?? undefined
   if (!customerId) {
     const customer = await stripe.customers.create({ metadata: { clerkId: userId, userId: user.id } })
