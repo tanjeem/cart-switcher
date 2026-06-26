@@ -1,0 +1,11 @@
+User-agent: *
+Allow: /
+
+Disallow: /dashboard
+Disallow: /admin
+Disallow: /api/
+Disallow: /migrate/progress/
+Disallow: /migrate/dedup/
+Disallow: /migrate/manage/
+
+Sitemap: https://cart-switcher.vercel.app/sitemap.xml
