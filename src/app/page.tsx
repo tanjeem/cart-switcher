@@ -261,7 +261,7 @@ export default function Home() {
               <p className="text-gray-500 text-[15px] leading-relaxed mb-7">
                 Not just products. Every customer, order, coupon, and blog post — with full SEO preservation.
               </p>
-              <Link href="/migrate/connect"
+              <Link href="/dashboard"
                 className="inline-flex items-center gap-2 text-white text-sm font-bold px-5 py-3 rounded-full hover:opacity-90 transition-all"
                 style={{ backgroundColor: G }}>
                 See it in action <ArrowRight className="w-3.5 h-3.5" />
@@ -348,7 +348,7 @@ export default function Home() {
                   <div className="text-gray-600 text-sm">Half the price of Cart2Cart. Full refund if anything fails. Done in under an hour.</div>
                 </div>
               </div>
-              <Link href="/migrate/connect"
+              <Link href="/dashboard"
                 className="flex-shrink-0 flex items-center gap-2 text-white text-sm font-bold px-6 py-3 rounded-full hover:opacity-90 transition-all shadow-sm"
                 style={{ backgroundColor: G }}>
                 Start now <ArrowRight className="w-4 h-4" />
@@ -525,7 +525,7 @@ export default function Home() {
                     </li>
                   ))}
                 </ul>
-                <Link href="/migrate/connect"
+                <Link href="/dashboard"
                   className="block text-center w-full py-2.5 rounded-xl border-2 border-gray-200 text-gray-700 font-semibold text-sm hover:bg-gray-50 transition-all">
                   Get Started
                 </Link>
@@ -559,7 +559,7 @@ export default function Home() {
                     </li>
                   ))}
                 </ul>
-                <Link href="/migrate/connect"
+                <Link href="/dashboard"
                   className="block text-center w-full py-3 rounded-xl text-white font-bold text-sm hover:opacity-90 hover:scale-[1.01] transition-all"
                   style={{ backgroundColor: G }}>
                   Get Started →
@@ -591,7 +591,7 @@ export default function Home() {
                     </li>
                   ))}
                 </ul>
-                <Link href="/migrate/connect"
+                <Link href="/dashboard"
                   className="block text-center w-full py-2.5 rounded-xl border-2 border-gray-200 text-gray-700 font-semibold text-sm hover:bg-gray-50 transition-all">
                   Get Started
                 </Link>
