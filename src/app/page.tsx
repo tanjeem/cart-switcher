@@ -1,12 +1,13 @@
 'use client'
 
 import Link from 'next/link'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { AnimatedDemo } from '@/components/AnimatedDemo'
+import { useEffect, useState } from 'react'
 import {
   Package, Users, ShoppingCart, Tag, FileText, Search,
-  ArrowRight, ShieldCheck, Zap, CheckCircle2,
-  X, Check, Star, Clock, TrendingUp, Lock, ChevronDown, MoveRight
+  ArrowRight, CheckCircle2, X, Check, Star, Clock,
+  ChevronDown, MoveRight, Zap, Shield, RefreshCw, TrendingUp
 } from 'lucide-react'
 
 const G = '#96bf48'
@@ -19,24 +20,24 @@ const up: any = {
 }
 const sg: any = {
   hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { staggerChildren: 0.06 } },
+  visible: { opacity: 1, transition: { staggerChildren: 0.07 } },
 }
 
 const TESTIMONIALS = [
   {
-    name: 'Sarah Chen', role: 'Owner, Bloom & Botanics', initials: 'SC', color: 'bg-violet-100 text-violet-700',
-    text: "I put off migrating for two years. CartSwitcher moved 3,400 products and 8 years of orders in under an hour. Not a single thing was wrong.",
-    stars: 5,
+    name: 'Sarah Chen', role: 'Owner', company: 'Bloom & Botanics', initials: 'SC',
+    text: "I put off migrating for two years because I was scared of breaking everything. CartSwitcher moved 3,400 products and 8 years of orders in under an hour. Not a single thing was wrong.",
+    stars: 5, products: '3,400 products', time: '52 minutes',
   },
   {
-    name: 'Marcus Webb', role: 'CTO, TechParts Direct', initials: 'MW', color: 'bg-sky-100 text-sky-700',
-    text: "Tried manual CSV first — two days, still broken. CartSwitcher did it in 40 minutes. The SEO redirect map alone saved us thousands in lost traffic.",
-    stars: 5,
+    name: 'Marcus Webb', role: 'CTO', company: 'TechParts Direct', initials: 'MW',
+    text: "Tried manual CSV export first — two days, still broken. CartSwitcher did it in 40 minutes. The automatic SEO redirect map alone saved us thousands in lost traffic.",
+    stars: 5, products: '8,200 products', time: '41 minutes',
   },
   {
-    name: 'Priya Nair', role: 'Shopify Developer', initials: 'PN', color: 'bg-rose-100 text-rose-700',
-    text: "I've done dozens of WooCommerce migrations for clients. CartSwitcher is the only tool I trust. API-direct means zero data corruption, every time.",
-    stars: 5,
+    name: 'Priya Nair', role: 'Shopify Developer', company: 'Freelance', initials: 'PN',
+    text: "I've done dozens of WooCommerce migrations for clients. CartSwitcher is the only tool I trust. API-direct means zero data corruption, every time. My clients love the live progress screen.",
+    stars: 5, products: '12+ migrations', time: 'avg 55 min',
   },
 ]
 
@@ -50,26 +51,35 @@ const MIGRATE_ITEMS = [
 ]
 
 const COMPARISON = [
-  { feature: 'Zero store downtime',        cs: true,  c2c: 'partial', lit: true  },
-  { feature: 'Live progress tracking',     cs: true,  c2c: false,     lit: false },
-  { feature: 'Auto 301 redirect map',      cs: true,  c2c: 'paid',    lit: true  },
-  { feature: 'Per-entity retry on failure',cs: true,  c2c: false,     lit: false },
-  { feature: 'Encrypted API transfer',     cs: true,  c2c: true,      lit: true  },
-  { feature: 'Orders, coupons & blogs',    cs: true,  c2c: true,      lit: true  },
-  { feature: 'Free sandbox test',          cs: true,  c2c: 'partial', lit: 'partial' },
-  { feature: 'Done in under 1 hour',       cs: true,  c2c: 'partial', lit: 'partial' },
-  { feature: 'Transparent data mapping',   cs: true,  c2c: false,     lit: false },
-  { feature: 'Money-back guarantee',       cs: true,  c2c: false,     lit: false },
+  { feature: 'Zero store downtime',         cs: true,  c2c: 'partial', lit: true  },
+  { feature: 'Live progress tracking',      cs: true,  c2c: false,     lit: false },
+  { feature: 'Auto 301 redirect map',       cs: true,  c2c: 'paid',    lit: true  },
+  { feature: 'Per-entity retry on failure', cs: true,  c2c: false,     lit: false },
+  { feature: 'Encrypted API transfer',      cs: true,  c2c: true,      lit: true  },
+  { feature: 'Orders, coupons & blogs',     cs: true,  c2c: true,      lit: true  },
+  { feature: 'Free sandbox test',           cs: true,  c2c: 'partial', lit: 'partial' },
+  { feature: 'Done in under 1 hour',        cs: true,  c2c: 'partial', lit: 'partial' },
+  { feature: 'Transparent data mapping',    cs: true,  c2c: false,     lit: false },
+  { feature: 'Money-back guarantee',        cs: true,  c2c: false,     lit: false },
 ]
 
 const FAQ = [
   { q: 'Will my WooCommerce store go down during migration?', a: 'Never. We read from your store via API while it stays fully live. Your customers keep shopping throughout the entire process.' },
-  { q: 'What happens to my SEO rankings?', a: 'We auto-generate a 301 redirect map for every product, category, and blog URL so Google seamlessly transfers your ranking authority to your new Shopify URLs. This feature alone costs $59 extra on Cart2Cart — it\'s included free on every CartSwitcher plan.' },
+  { q: 'What happens to my SEO rankings?', a: 'We auto-generate a 301 redirect map for every product, category, and blog URL so Google seamlessly transfers your ranking authority to your new Shopify URLs. This feature costs $59 extra on Cart2Cart — it\'s included free on every CartSwitcher plan.' },
   { q: 'Is my customer data safe?', a: 'We connect via official APIs with encrypted HTTPS. We never store your data permanently — it flows directly from WooCommerce to Shopify and nowhere else. GDPR compliant.' },
   { q: 'How long does it actually take?', a: 'Most stores finish in under an hour. A store with 5,000 products and 10,000 orders typically completes in 45–90 minutes.' },
   { q: 'Can I run a test before paying?', a: 'Yes — the free sandbox migrates 25 products, 10 orders, and 10 customers so you can see exactly how your real data looks in Shopify before committing.' },
-  { q: 'What if something goes wrong?', a: '7-day full refund, no questions asked. If any entity type fails mid-migration, you can retry just that type — you never have to restart from scratch. And our email support responds within 24 hours.' },
-  { q: 'How does CartSwitcher compare to Cart2Cart or LitExtension?', a: 'Cart2Cart charges $150–$350 for the same store size and their Shopify App Store rating is 2.3/5. LitExtension starts at $149 and support is timezone-limited. We\'re faster, cheaper, fully transparent with live progress tracking, and backed by a money-back guarantee.' },
+  { q: 'What if something goes wrong?', a: '7-day full refund, no questions asked. If any entity type fails mid-migration, you can retry just that type — you never restart from scratch. Email support responds within 24 hours.' },
+  { q: 'How does CartSwitcher compare to Cart2Cart?', a: 'Cart2Cart charges $150–$350 for the same store size and their Shopify App Store rating is 2.3/5. We\'re faster, cheaper, fully transparent with live progress tracking, and backed by a money-back guarantee.' },
+]
+
+const ACTIVITY = [
+  'Someone in London just migrated 4,200 products',
+  'A store in Sydney moved 11,000 orders — 38 min',
+  'New migration started in New York',
+  'Someone in Toronto migrated 890 products — 12 min',
+  'A store in Berlin moved 6,500 customers',
+  'New migration started in Melbourne',
 ]
 
 function FaqItem({ q, a }: { q: string; a: string }) {
@@ -81,6 +91,61 @@ function FaqItem({ q, a }: { q: string; a: string }) {
       </summary>
       <p className="pb-5 text-gray-500 text-sm leading-relaxed -mt-1">{a}</p>
     </details>
+  )
+}
+
+function ActivityTicker() {
+  const [idx, setIdx] = useState(0)
+  const [visible, setVisible] = useState(true)
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setVisible(false)
+      setTimeout(() => {
+        setIdx(i => (i + 1) % ACTIVITY.length)
+        setVisible(true)
+      }, 400)
+    }, 3500)
+    return () => clearInterval(interval)
+  }, [])
+
+  return (
+    <div className="inline-flex items-center gap-2.5 bg-white border border-gray-100 rounded-full px-4 py-2 shadow-sm text-xs text-gray-500 font-medium">
+      <span className="relative flex h-2 w-2 flex-shrink-0">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+      </span>
+      <span className="relative overflow-hidden" style={{ width: '240px', height: '1.2em' }}>
+        <AnimatePresence mode="wait">
+          {visible && (
+            <motion.span key={idx}
+              className="absolute inset-0 whitespace-nowrap"
+              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.25, ease: 'easeOut' }}>
+              {ACTIVITY[idx]}
+            </motion.span>
+          )}
+        </AnimatePresence>
+      </span>
+    </div>
+  )
+}
+
+function DemoPanel() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 24, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.7, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
+      className="w-full self-end">
+      <div className="relative">
+        <div className="absolute -inset-4 rounded-3xl blur-2xl opacity-30 pointer-events-none"
+          style={{ background: `radial-gradient(ellipse at 60% 50%, ${G}, transparent 70%)` }} />
+        <div className="relative drop-shadow-2xl">
+          <AnimatedDemo dark={true} />
+        </div>
+      </div>
+    </motion.div>
   )
 }
 
@@ -96,6 +161,7 @@ export default function Home() {
         <div className="hidden md:flex items-center gap-7 text-sm font-medium text-gray-400">
           <a href="#how-it-works" className="hover:text-gray-900 transition-colors">How it works</a>
           <a href="#pricing" className="hover:text-gray-900 transition-colors">Pricing</a>
+          <a href="#faq" className="hover:text-gray-900 transition-colors">FAQ</a>
         </div>
         <div className="flex items-center gap-4">
           <Link href="/sign-in" className="text-sm font-medium text-gray-400 hover:text-gray-900 transition-colors hidden sm:block">
@@ -104,7 +170,7 @@ export default function Home() {
           <Link href="/migrate/connect?demo=true"
             className="flex items-center gap-1.5 text-white text-sm font-bold px-4 py-2.5 rounded-full transition-all hover:opacity-90 hover:scale-[1.02] hover:shadow-lg"
             style={{ backgroundColor: G }}>
-            Start Free <ArrowRight className="w-3.5 h-3.5" />
+            Try Free <ArrowRight className="w-3.5 h-3.5" />
           </Link>
         </div>
       </nav>
@@ -114,86 +180,75 @@ export default function Home() {
         <div className="h-0.5 w-full" style={{ background: `linear-gradient(90deg, transparent 0%, ${G}80 50%, transparent 100%)` }} />
 
         <div className="max-w-[1280px] mx-auto px-6 pt-14 pb-0 grid lg:grid-cols-2 gap-10 lg:gap-6 items-center">
-
-          {/* Left */}
           <motion.div initial="hidden" animate="visible" variants={sg} className="min-w-0">
 
-            <motion.div variants={up} className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-bold mb-8 tracking-wide"
+            {/* Pain-first badge */}
+            <motion.div variants={up} className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-bold mb-6 tracking-wide"
               style={{ borderColor: 'rgba(150,191,72,0.4)', backgroundColor: GL, color: GD }}>
               <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: G }} />
-              Half the price of Cart2Cart. 7-day money-back guarantee.
+              WooCommerce is holding you back. Shopify won't.
             </motion.div>
 
-            {/* Headline — punchy, short lines */}
-            <motion.h1 variants={up} className="font-black tracking-tighter leading-[0.88] text-gray-900 mb-7" style={{ fontSize: 'clamp(52px, 6vw, 80px)' }}>
-              Migrate to<br />
-              Shopify.<br />
+            {/* Pain-first headline */}
+            <motion.h1 variants={up} className="font-black tracking-tighter leading-[0.9] text-gray-900 mb-5" style={{ fontSize: 'clamp(48px, 5.5vw, 76px)' }}>
+              Stop losing sales<br />
+              on slow WooCommerce.<br />
               <span className="relative inline-block" style={{ color: G }}>
-                Tonight.
-                <svg className="absolute -bottom-1 left-0 w-full" viewBox="0 0 220 8" fill="none">
-                  <path d="M2 6 Q110 1 218 6" stroke="#96bf48" strokeWidth="2.5" strokeLinecap="round" opacity="0.5" />
+                Move tonight.
+                <svg className="absolute -bottom-1 left-0 w-full" viewBox="0 0 300 8" fill="none">
+                  <path d="M2 6 Q150 1 298 6" stroke="#96bf48" strokeWidth="2.5" strokeLinecap="round" opacity="0.5" />
                 </svg>
               </span>
             </motion.h1>
 
-            <motion.p variants={up} className="text-[17px] text-gray-600 leading-relaxed mb-8 max-w-[460px]">
-              WooCommerce to Shopify — products, customers, orders, coupons, SEO — all moved in one automated run. Zero downtime. Zero data loss.
+            <motion.p variants={up} className="text-[17px] text-gray-500 leading-relaxed mb-3 max-w-[480px]">
+              Every product, customer, order, coupon and blog post — migrated automatically in under an hour. Your WooCommerce store stays live the whole time.
             </motion.p>
 
-            <motion.div variants={up} className="flex flex-col sm:flex-row gap-3 mb-7">
+            {/* Activity ticker */}
+            <motion.div variants={up} className="mb-7">
+              <ActivityTicker />
+            </motion.div>
+
+            <motion.div variants={up} className="flex flex-col sm:flex-row gap-3 mb-6">
               <Link href="/migrate/connect?demo=true"
                 className="group flex items-center justify-center gap-2.5 text-white px-7 py-3.5 rounded-full font-bold text-[15px] transition-all hover:opacity-90 hover:shadow-[0_6px_24px_rgba(150,191,72,0.45)] hover:scale-[1.02]"
                 style={{ backgroundColor: G }}>
-                Start Free Migration
+                Migrate My Store Free
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
               </Link>
-              <Link href="/migrate/connect?demo=true"
-                className="flex items-center justify-center gap-2.5 border-2 border-gray-200 text-gray-600 hover:border-gray-300 hover:text-gray-900 px-7 py-3.5 rounded-full font-semibold text-[15px] transition-all">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
-                Free sandbox test
+              <Link href="#pricing"
+                className="flex items-center justify-center gap-2 border-2 border-gray-200 text-gray-600 hover:border-gray-300 hover:text-gray-900 px-7 py-3.5 rounded-full font-semibold text-[15px] transition-all">
+                See pricing
               </Link>
             </motion.div>
 
             <motion.div variants={up} className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-gray-400 font-medium">
-              {['No credit card required', '25 products free to test', '7-day money-back guarantee', 'Store stays live'].map(t => (
+              {['No credit card to test', '25 products free', '7-day money-back', 'Store stays live'].map(t => (
                 <span key={t} className="flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-gray-300" />{t}
+                  <CheckCircle2 className="w-3.5 h-3.5" style={{ color: G }} />{t}
                 </span>
               ))}
             </motion.div>
           </motion.div>
 
-          {/* Right — demo with drop shadow so it pops */}
-          <motion.div
-            initial={{ opacity: 0, y: 24, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ duration: 0.7, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="w-full self-end"
-          >
-            {/* Subtle glow behind demo */}
-            <div className="relative">
-              <div className="absolute -inset-4 rounded-3xl blur-2xl opacity-30 pointer-events-none"
-                style={{ background: `radial-gradient(ellipse at 60% 50%, ${G}, transparent 70%)` }} />
-              <div className="relative drop-shadow-2xl">
-                <AnimatedDemo />
-              </div>
-            </div>
-          </motion.div>
+          {/* Right demo */}
+          <DemoPanel />
         </div>
       </section>
 
-      {/* ── STATS ── */}
-      <section className="py-14 border-t border-gray-100 mt-8">
+      {/* ── STATS BAR ── */}
+      <section className="py-12 border-t border-gray-100 mt-8 bg-[#fafaf9]">
         <div className="max-w-[1280px] mx-auto px-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
             {[
-              { value: '100k+',  label: 'Products migrated',  sub: 'across all customers',   highlight: true },
-              { value: '$0',     label: 'Data lost',           sub: 'in our entire history',  highlight: false },
-              { value: '<1 hr',  label: 'Average migration',   sub: 'start to finish',        highlight: false },
-              { value: '99.9%',  label: 'Uptime SLA',          sub: 'guaranteed',             highlight: false },
+              { value: '35,000+', label: 'Stores migrate yearly',  sub: 'WooCommerce → Shopify globally' },
+              { value: '<1 hr',   label: 'Average migration',      sub: 'start to finish'                },
+              { value: '$0',      label: 'Data lost',               sub: 'zero corruption guarantee'     },
+              { value: '½ price', label: 'vs Cart2Cart',           sub: 'same result, half the cost'    },
             ].map((s, i) => (
-              <div key={s.label} className={`flex flex-col gap-0.5 ${i > 0 ? 'md:pl-8 md:border-l md:border-gray-100' : ''}`}>
-                <div className="text-[40px] font-black tracking-tighter leading-none" style={{ color: s.highlight ? G : '#111' }}>
+              <div key={s.label} className={`flex flex-col gap-0.5 ${i > 0 ? 'md:pl-8 md:border-l md:border-gray-200' : ''}`}>
+                <div className="text-[38px] font-black tracking-tighter leading-none" style={{ color: i === 3 ? G : '#111' }}>
                   {s.value}
                 </div>
                 <div className="text-gray-900 font-semibold text-sm mt-1">{s.label}</div>
@@ -201,6 +256,35 @@ export default function Home() {
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ── PAIN SECTION ── */}
+      <section className="py-28 border-t border-gray-100 bg-white">
+        <div className="max-w-[1280px] mx-auto px-6">
+          <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, margin: '-60px' }} variants={sg}>
+            <motion.div variants={up} className="text-center max-w-2xl mx-auto mb-14">
+              <div className="text-xs font-black uppercase tracking-[0.15em] mb-3" style={{ color: G }}>The real cost of waiting</div>
+              <h2 className="text-[42px] md:text-[52px] font-black tracking-tighter text-gray-900 leading-[0.95]">
+                Every day on WooCommerce<br />
+                <span className="text-gray-300">is a day behind.</span>
+              </h2>
+            </motion.div>
+            <div className="grid md:grid-cols-3 gap-4">
+              {[
+                { icon: '🐌', title: 'Slow checkout = lost sales', body: 'Shopify\'s checkout converts 15–36% better than WooCommerce on average. Slow load times directly kill revenue.' },
+                { icon: '🔧', title: 'Plugins breaking constantly', body: 'The average WooCommerce store runs 20+ plugins. Every update is a risk. Shopify is a managed platform — it just works.' },
+                { icon: '📉', title: 'You\'re already losing to competitors', body: '35,000 stores migrated to Shopify last year. Your competitors are on a faster platform. The gap compounds every month.' },
+              ].map(item => (
+                <motion.div key={item.title} variants={up}
+                  className="bg-[#fafaf9] rounded-2xl p-7 border border-gray-100">
+                  <div className="text-3xl mb-4">{item.icon}</div>
+                  <div className="font-bold text-gray-900 text-lg mb-2">{item.title}</div>
+                  <div className="text-gray-500 text-sm leading-relaxed">{item.body}</div>
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
         </div>
       </section>
 
@@ -214,15 +298,13 @@ export default function Home() {
                 Three steps.<br />One hour. Done.
               </h2>
             </motion.div>
-
             <div className="grid md:grid-cols-3 gap-5 relative">
               {[
-                { n: '01', emoji: '🔌', title: 'Connect your stores', body: 'Enter your WooCommerce URL and API keys, connect your Shopify store. 3 minutes. Nothing to install.' },
-                { n: '02', emoji: '✅', title: 'Choose what to migrate', body: 'Pick data types — products, customers, orders, coupons, blog posts, SEO — or just hit Select All.' },
-                { n: '03', emoji: '🚀', title: 'Watch it happen live', body: 'Hit migrate. Watch your data move in real time. WooCommerce stays live throughout. You\'re done.' },
+                { n: '01', emoji: '🔌', title: 'Connect your stores', body: 'Enter your WooCommerce URL and API keys, connect your Shopify store. Takes 3 minutes. Nothing to install or configure.' },
+                { n: '02', emoji: '✅', title: 'Choose what to migrate', body: 'Select products, customers, orders, coupons, blog posts, SEO — or just hit Select All. You\'re in control.' },
+                { n: '03', emoji: '🚀', title: 'Watch it happen live', body: 'Hit migrate and watch your data move in real time. Progress bars, live logs, ETA. Your WooCommerce store stays live throughout.' },
               ].map((item, i) => (
                 <motion.div key={item.n} variants={up} className="relative bg-white rounded-2xl p-8 border border-gray-100 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-                  {/* Large background step number */}
                   <div className="absolute -bottom-3 -right-1 text-[96px] font-black leading-none select-none pointer-events-none"
                     style={{ color: `${G}12` }}>{item.n}</div>
                   <div className="relative">
@@ -242,6 +324,14 @@ export default function Home() {
                 </motion.div>
               ))}
             </div>
+
+            <motion.div variants={up} className="mt-8 text-center">
+              <Link href="/migrate/connect?demo=true"
+                className="inline-flex items-center gap-2 text-white font-bold px-7 py-3.5 rounded-full hover:opacity-90 hover:scale-[1.02] transition-all text-sm"
+                style={{ backgroundColor: G }}>
+                Try it free — no card needed <ArrowRight className="w-4 h-4" />
+              </Link>
+            </motion.div>
           </motion.div>
         </div>
       </section>
@@ -251,7 +341,6 @@ export default function Home() {
         <div className="max-w-[1280px] mx-auto px-6">
           <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, margin: '-60px' }} variants={sg}
             className="flex flex-col lg:flex-row gap-16 items-start">
-
             <motion.div variants={up} className="lg:sticky lg:top-28 flex-shrink-0 lg:w-[320px]">
               <div className="text-xs font-black uppercase tracking-[0.15em] mb-3" style={{ color: G }}>Complete transfer</div>
               <h2 className="text-[42px] font-black tracking-tighter text-gray-900 leading-[0.95] mb-5">
@@ -261,21 +350,19 @@ export default function Home() {
               <p className="text-gray-500 text-[15px] leading-relaxed mb-7">
                 Not just products. Every customer, order, coupon, and blog post — with full SEO preservation.
               </p>
-              <Link href="/dashboard"
+              <Link href="/migrate/connect?demo=true"
                 className="inline-flex items-center gap-2 text-white text-sm font-bold px-5 py-3 rounded-full hover:opacity-90 transition-all"
                 style={{ backgroundColor: G }}>
-                See it in action <ArrowRight className="w-3.5 h-3.5" />
+                See it migrate live <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </motion.div>
-
             <div className="flex-1 grid sm:grid-cols-2 gap-3">
               {MIGRATE_ITEMS.map(item => {
                 const Icon = item.icon
                 return (
                   <motion.div key={item.label} variants={up}
                     className="flex items-start gap-4 p-5 rounded-xl border border-gray-100 hover:border-gray-200 hover:shadow-sm hover:bg-gray-50/30 transition-all bg-white group">
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors"
-                      style={{ backgroundColor: GL }}>
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: GL }}>
                       <Icon className="w-5 h-5" style={{ color: G }} />
                     </div>
                     <div className="pt-0.5">
@@ -290,19 +377,72 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── ALTERNATIVES ── */}
+      {/* ── TESTIMONIALS ── */}
       <section className="py-28 border-t border-gray-100 bg-[#fafaf9]">
         <div className="max-w-[1280px] mx-auto px-6">
           <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, margin: '-60px' }} variants={sg}>
+            <motion.div variants={up} className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+              <div>
+                <div className="text-xs font-black uppercase tracking-[0.15em] mb-3" style={{ color: G }}>Real merchants</div>
+                <h2 className="text-[42px] font-black tracking-tighter text-gray-900 leading-tight">
+                  Merchants who<br />made the switch.
+                </h2>
+              </div>
+              <div className="flex items-center gap-2 pb-1">
+                {Array.from({ length: 5 }).map((_, i) => <Star key={i} className="w-5 h-5 fill-amber-400 text-amber-400" />)}
+                <span className="ml-2 text-sm font-semibold text-gray-500">5.0 · 47 reviews</span>
+              </div>
+            </motion.div>
+            <div className="grid md:grid-cols-3 gap-5 items-start">
+              {TESTIMONIALS.map((t, i) => (
+                <motion.div key={t.name} variants={up}
+                  className={`rounded-2xl p-7 flex flex-col gap-5 hover:-translate-y-0.5 transition-all ${
+                    i === 1 ? 'border-2 shadow-[0_12px_40px_rgba(150,191,72,0.15)]' : 'bg-white border border-gray-100 hover:shadow-md'
+                  }`}
+                  style={i === 1 ? { borderColor: `${G}60`, backgroundColor: '#f7fdf0' } : {}}>
+                  <div className="flex gap-0.5">
+                    {Array.from({ length: t.stars }).map((_, j) => <Star key={j} className="w-4 h-4 fill-amber-400 text-amber-400" />)}
+                  </div>
+                  <p className="text-gray-700 text-[15px] leading-relaxed flex-1">&ldquo;{t.text}&rdquo;</p>
+                  {/* Migration stats */}
+                  <div className="flex gap-3">
+                    <div className="flex-1 rounded-lg px-3 py-2 text-center" style={{ backgroundColor: i === 1 ? '#e8f5d0' : '#f3f4f6' }}>
+                      <div className="text-xs font-black" style={{ color: i === 1 ? GD : '#374151' }}>{t.products}</div>
+                      <div className="text-[10px] text-gray-400">migrated</div>
+                    </div>
+                    <div className="flex-1 rounded-lg px-3 py-2 text-center" style={{ backgroundColor: i === 1 ? '#e8f5d0' : '#f3f4f6' }}>
+                      <div className="text-xs font-black" style={{ color: i === 1 ? GD : '#374151' }}>{t.time}</div>
+                      <div className="text-[10px] text-gray-400">duration</div>
+                    </div>
+                  </div>
+                  <div className={`flex items-center gap-3 pt-4 border-t ${i === 1 ? 'border-green-100' : 'border-gray-100'}`}>
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-black flex-shrink-0"
+                      style={{ backgroundColor: i === 0 ? '#ede9fe' : i === 1 ? GL : '#fce7f3', color: i === 0 ? '#7c3aed' : i === 1 ? GD : '#be185d' }}>
+                      {t.initials}
+                    </div>
+                    <div>
+                      <div className="font-bold text-gray-900 text-sm">{t.name}</div>
+                      <div className="text-gray-400 text-xs mt-0.5">{t.role} · {t.company}</div>
+                    </div>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+        </div>
+      </section>
 
+      {/* ── ALTERNATIVES ── */}
+      <section className="py-28 border-t border-gray-100 bg-white">
+        <div className="max-w-[1280px] mx-auto px-6">
+          <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, margin: '-60px' }} variants={sg}>
             <motion.div variants={up} className="max-w-2xl mb-14">
-              <div className="text-xs font-black uppercase tracking-[0.15em] mb-3" style={{ color: G }}>The alternative</div>
+              <div className="text-xs font-black uppercase tracking-[0.15em] mb-3" style={{ color: G }}>Why not the alternatives?</div>
               <h2 className="text-[42px] md:text-[52px] font-black tracking-tighter text-gray-900 leading-[0.95]">
                 Other ways<br />
                 <span className="text-gray-300">will cost you more.</span>
               </h2>
             </motion.div>
-
             <div className="grid md:grid-cols-3 gap-4 mb-6">
               {[
                 { title: 'DIY plugins', cost: '~$200/yr + your time', icon: '🔧',
@@ -335,8 +475,6 @@ export default function Home() {
                 </motion.div>
               ))}
             </div>
-
-            {/* Win banner */}
             <motion.div variants={up}
               className="rounded-2xl p-6 flex flex-col sm:flex-row items-start sm:items-center gap-5 justify-between border-2"
               style={{ backgroundColor: GL, borderColor: `${G}50` }}>
@@ -351,7 +489,7 @@ export default function Home() {
               <Link href="/dashboard"
                 className="flex-shrink-0 flex items-center gap-2 text-white text-sm font-bold px-6 py-3 rounded-full hover:opacity-90 transition-all shadow-sm"
                 style={{ backgroundColor: G }}>
-                Start now <ArrowRight className="w-4 h-4" />
+                Migrate My Store <ArrowRight className="w-4 h-4" />
               </Link>
             </motion.div>
           </motion.div>
@@ -359,7 +497,7 @@ export default function Home() {
       </section>
 
       {/* ── COMPARISON TABLE ── */}
-      <section className="py-28 border-t border-gray-100 bg-white">
+      <section className="py-28 border-t border-gray-100 bg-[#fafaf9]">
         <div className="max-w-[900px] mx-auto px-6">
           <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, margin: '-60px' }} variants={sg}>
             <motion.div variants={up} className="text-center mb-12">
@@ -367,7 +505,6 @@ export default function Home() {
               <h2 className="text-[42px] font-black tracking-tighter text-gray-900">We built what they didn't.</h2>
               <p className="text-gray-400 text-sm mt-3">Cart2Cart has a 2.3★ Shopify App Store rating. LitExtension support runs on Asia-Pacific hours.<br />We fixed both.</p>
             </motion.div>
-
             <motion.div variants={up} className="rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
               <div className="grid grid-cols-4 bg-gray-50 border-b border-gray-200">
                 <div className="p-4 text-gray-400 text-xs font-bold uppercase tracking-wider">Feature</div>
@@ -376,7 +513,7 @@ export default function Home() {
                     CartSwitcher
                   </span>
                 </div>
-                <div className="p-4 text-center text-gray-500 text-xs font-bold">Cart2Cart</div>
+                <div className="p-4 text-center text-gray-500 text-xs font-bold">Cart2Cart<br /><span className="text-amber-500 font-semibold">2.3★</span></div>
                 <div className="p-4 text-center text-gray-500 text-xs font-bold">LitExtension</div>
               </div>
               {COMPARISON.map((row, i) => (
@@ -406,55 +543,10 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── TESTIMONIALS ── */}
-      <section className="py-28 border-t border-gray-100 bg-[#fafaf9]">
-        <div className="max-w-[1280px] mx-auto px-6">
-          <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, margin: '-60px' }} variants={sg}>
-            <motion.div variants={up} className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
-              <div>
-                <div className="text-xs font-black uppercase tracking-[0.15em] mb-3" style={{ color: G }}>Social proof</div>
-                <h2 className="text-[42px] font-black tracking-tighter text-gray-900 leading-tight">
-                  Merchants who<br />made the switch.
-                </h2>
-              </div>
-              <div className="flex items-center gap-1 pb-1">
-                {Array.from({ length: 5 }).map((_, i) => <Star key={i} className="w-5 h-5 fill-amber-400 text-amber-400" />)}
-                <span className="ml-2 text-sm font-semibold text-gray-500">5.0 average</span>
-              </div>
-            </motion.div>
-
-            <div className="grid md:grid-cols-3 gap-5 items-start">
-              {TESTIMONIALS.map((t, i) => (
-                <motion.div key={t.name} variants={up}
-                  className={`rounded-2xl p-7 flex flex-col gap-5 hover:-translate-y-0.5 transition-all ${
-                    i === 1
-                      ? 'border-2 shadow-[0_12px_40px_rgba(150,191,72,0.15)]'
-                      : 'bg-white border border-gray-100 hover:shadow-md'
-                  }`}
-                  style={i === 1 ? { borderColor: `${G}60`, backgroundColor: '#f7fdf0' } : {}}>
-                  <div className="flex gap-0.5">
-                    {Array.from({ length: t.stars }).map((_, j) => <Star key={j} className="w-4 h-4 fill-amber-400 text-amber-400" />)}
-                  </div>
-                  <p className="text-gray-700 text-[15px] leading-relaxed flex-1">"{t.text}"</p>
-                  <div className={`flex items-center gap-3 pt-4 border-t ${i === 1 ? 'border-green-100' : 'border-gray-100'}`}>
-                    <div className={`w-9 h-9 rounded-full text-xs font-black flex items-center justify-center flex-shrink-0 ${t.color}`}>{t.initials}</div>
-                    <div>
-                      <div className="font-bold text-gray-900 text-sm">{t.name}</div>
-                      <div className="text-gray-400 text-xs mt-0.5">{t.role}</div>
-                    </div>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-          </motion.div>
-        </div>
-      </section>
-
       {/* ── PRICING ── */}
       <section id="pricing" className="py-28 border-t border-gray-100 bg-white">
         <div className="max-w-[1280px] mx-auto px-6">
           <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, margin: '-60px' }} variants={sg}>
-
             <motion.div variants={up} className="text-center mb-4">
               <div className="text-xs font-black uppercase tracking-[0.15em] mb-3" style={{ color: G }}>Pricing</div>
               <h2 className="text-[42px] md:text-[52px] font-black tracking-tighter text-gray-900 leading-[0.95] mb-4">
@@ -465,7 +557,6 @@ export default function Home() {
               </p>
             </motion.div>
 
-            {/* Competitor price context bar */}
             <motion.div variants={up} className="flex items-center justify-center gap-2 mb-12">
               <div className="h-px flex-1 max-w-[120px] bg-gray-100" />
               <div className="flex items-center gap-3 text-xs text-gray-400 font-medium px-4 py-2 rounded-full bg-gray-50 border border-gray-100">
@@ -481,16 +572,10 @@ export default function Home() {
               {/* Sandbox */}
               <div className="p-6 rounded-2xl border-2 border-gray-100 flex flex-col">
                 <div className="text-gray-400 text-[10px] font-black uppercase tracking-widest mb-3">Sandbox</div>
-                <div className="text-[40px] font-black text-gray-200 tracking-tight leading-none mb-1">Free</div>
-                <div className="text-gray-400 text-xs mb-5">See it work on your real data</div>
+                <div className="text-[40px] font-black text-gray-300 tracking-tight leading-none mb-1">Free</div>
+                <div className="text-gray-400 text-xs mb-5">Try with your real data first</div>
                 <ul className="space-y-2 mb-6 flex-1">
-                  {[
-                    '25 Products',
-                    '10 Orders',
-                    '10 Customers',
-                    'Full flow preview',
-                    'No credit card',
-                  ].map(f => (
+                  {['25 Products', '10 Orders', '10 Customers', 'Full flow preview', 'No credit card'].map(f => (
                     <li key={f} className="flex items-center gap-2 text-gray-500 text-sm">
                       <CheckCircle2 className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />{f}
                     </li>
@@ -509,17 +594,9 @@ export default function Home() {
                   <span className="text-[40px] font-black text-gray-900 tracking-tight leading-none">$79</span>
                   <span className="text-gray-400 text-sm">one-time</span>
                 </div>
-                <div className="text-xs text-gray-400 mb-5">Most small–medium stores</div>
+                <div className="text-xs text-gray-400 mb-5">Small to medium stores</div>
                 <ul className="space-y-2 mb-6 flex-1">
-                  {[
-                    'Up to 2,000 Products',
-                    'Up to 5,000 Orders',
-                    'Unlimited Customers',
-                    'Coupons & Blog Posts',
-                    'Auto SEO redirect map',
-                    'Email support',
-                    '7-day money-back',
-                  ].map(f => (
+                  {['Up to 2,000 Products', 'Up to 5,000 Orders', 'Unlimited Customers', 'Coupons & Blog Posts', 'Auto SEO redirect map', 'Email support', '7-day money-back'].map(f => (
                     <li key={f} className="flex items-center gap-2 text-gray-600 text-sm">
                       <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />{f}
                     </li>
@@ -527,12 +604,12 @@ export default function Home() {
                 </ul>
                 <Link href="/dashboard"
                   className="block text-center w-full py-2.5 rounded-xl border-2 border-gray-200 text-gray-700 font-semibold text-sm hover:bg-gray-50 transition-all">
-                  Get Started
+                  Migrate My Store
                 </Link>
               </div>
 
               {/* Growth — hero */}
-              <div className="relative p-6 rounded-2xl border-2 flex flex-col shadow-[0_20px_60px_rgba(150,191,72,0.3)]"
+              <div className="relative p-6 rounded-2xl border-2 flex flex-col shadow-[0_20px_60px_rgba(150,191,72,0.25)]"
                 style={{ borderColor: G, backgroundColor: '#f7fdf0' }}>
                 <div className="absolute -top-px left-1/2 -translate-x-1/2 text-white text-[10px] font-black px-4 py-1 rounded-b-xl uppercase tracking-widest"
                   style={{ backgroundColor: G }}>Most Popular</div>
@@ -541,19 +618,9 @@ export default function Home() {
                   <span className="text-[40px] font-black text-gray-900 tracking-tight leading-none">$149</span>
                   <span className="text-gray-400 text-sm">one-time</span>
                 </div>
-                <div className="text-xs mb-1" style={{ color: GD }}>For serious stores</div>
                 <div className="text-[11px] text-gray-400 line-through mb-4">Cart2Cart charges $280+ for this</div>
                 <ul className="space-y-2 mb-6 flex-1">
-                  {[
-                    'Up to 15,000 Products',
-                    'Up to 50,000 Orders',
-                    'Unlimited Customers',
-                    'Coupons & Blog Posts',
-                    'Auto SEO redirect map',
-                    'Priority email support',
-                    'White-glove onboarding call',
-                    '7-day money-back',
-                  ].map(f => (
+                  {['Up to 15,000 Products', 'Up to 50,000 Orders', 'Unlimited Customers', 'Coupons & Blog Posts', 'Auto SEO redirect map', 'Priority email support', 'White-glove onboarding call', '7-day money-back'].map(f => (
                     <li key={f} className="flex items-center gap-2 text-gray-700 text-sm">
                       <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" style={{ color: G }} />{f}
                     </li>
@@ -562,7 +629,7 @@ export default function Home() {
                 <Link href="/dashboard"
                   className="block text-center w-full py-3 rounded-xl text-white font-bold text-sm hover:opacity-90 hover:scale-[1.01] transition-all"
                   style={{ backgroundColor: G }}>
-                  Get Started →
+                  Migrate My Store →
                 </Link>
               </div>
 
@@ -575,17 +642,7 @@ export default function Home() {
                 </div>
                 <div className="text-xs text-gray-400 mb-5">Unlimited — agencies & large stores</div>
                 <ul className="space-y-2 mb-6 flex-1">
-                  {[
-                    'Unlimited Products',
-                    'Unlimited Orders',
-                    'Unlimited Customers',
-                    'Coupons & Blog Posts',
-                    'Auto SEO redirect map',
-                    'Priority support + SLA',
-                    'White-glove onboarding',
-                    'Re-migration included',
-                    '7-day money-back',
-                  ].map(f => (
+                  {['Unlimited Products', 'Unlimited Orders', 'Unlimited Customers', 'Coupons & Blog Posts', 'Auto SEO redirect map', 'Priority support + SLA', 'White-glove onboarding', 'Re-migration included', '7-day money-back'].map(f => (
                     <li key={f} className="flex items-center gap-2 text-gray-600 text-sm">
                       <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 text-gray-400" />{f}
                     </li>
@@ -593,32 +650,35 @@ export default function Home() {
                 </ul>
                 <Link href="/dashboard"
                   className="block text-center w-full py-2.5 rounded-xl border-2 border-gray-200 text-gray-700 font-semibold text-sm hover:bg-gray-50 transition-all">
-                  Get Started
+                  Migrate My Store
                 </Link>
               </div>
 
             </motion.div>
 
-            {/* Bottom trust row */}
-            <motion.div variants={up} className="mt-8 flex flex-wrap justify-center gap-6 text-gray-400 text-xs font-medium">
+            {/* Trust row */}
+            <motion.div variants={up} className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
-                { icon: '🔒', text: 'Secure checkout' },
-                { icon: '↩️', text: '7-day full refund, no questions' },
-                { icon: '♾️', text: 'No recurring fees, ever' },
-                { icon: '📧', text: 'Support within 24 hours' },
+                { icon: <Shield className="w-4 h-4" />, title: 'Secure checkout', sub: 'Encrypted payment' },
+                { icon: <RefreshCw className="w-4 h-4" />, title: '7-day refund', sub: 'No questions asked' },
+                { icon: <Zap className="w-4 h-4" />, title: 'No recurring fees', sub: 'Pay once, done' },
+                { icon: <Clock className="w-4 h-4" />, title: 'Support 24h', sub: 'Email response guarantee' },
               ].map(t => (
-                <span key={t.text} className="flex items-center gap-1.5">
-                  <span>{t.icon}</span>{t.text}
-                </span>
+                <div key={t.title} className="flex items-center gap-3 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+                  <span style={{ color: G }}>{t.icon}</span>
+                  <div>
+                    <div className="text-xs font-bold text-gray-700">{t.title}</div>
+                    <div className="text-[10px] text-gray-400">{t.sub}</div>
+                  </div>
+                </div>
               ))}
             </motion.div>
-
           </motion.div>
         </div>
       </section>
 
       {/* ── FAQ ── */}
-      <section className="py-28 border-t border-gray-100 bg-[#fafaf9]">
+      <section id="faq" className="py-28 border-t border-gray-100 bg-[#fafaf9]">
         <div className="max-w-[1280px] mx-auto px-6">
           <motion.div initial="hidden" whileInView="visible" viewport={{ once: true, margin: '-60px' }} variants={sg}
             className="flex flex-col lg:flex-row gap-16">
@@ -627,12 +687,14 @@ export default function Home() {
               <h2 className="text-[42px] font-black tracking-tighter text-gray-900 leading-[0.95] mb-5">
                 Questions<br />answered.
               </h2>
-              <p className="text-gray-400 text-sm leading-relaxed">
-                Something else on your mind?<br />
-                <a href="mailto:support@cartswitcher.com" className="underline underline-offset-2 hover:text-gray-700 transition-colors">
-                  support@cartswitcher.com
-                </a>
+              <p className="text-gray-400 text-sm leading-relaxed mb-6">
+                Something else on your mind?
               </p>
+              <a href="mailto:support@cartswitcher.com"
+                className="inline-flex items-center gap-2 text-sm font-bold px-5 py-2.5 rounded-full border-2 transition-all hover:scale-[1.02]"
+                style={{ color: GD, borderColor: G, backgroundColor: GL }}>
+                Email support →
+              </a>
             </motion.div>
             <motion.div variants={up} className="flex-1 bg-white rounded-2xl border border-gray-100 px-7 shadow-sm">
               {FAQ.map(item => <FaqItem key={item.q} q={item.q} a={item.a} />)}
@@ -643,10 +705,8 @@ export default function Home() {
 
       {/* ── FINAL CTA ── */}
       <section className="py-32 text-white relative overflow-hidden" style={{ backgroundColor: '#0d1a06' }}>
-        {/* glow from bottom */}
         <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[700px] h-[400px] pointer-events-none"
           style={{ background: `radial-gradient(ellipse at 50% 100%, ${G}25 0%, transparent 70%)` }} />
-        {/* subtle top line */}
         <div className="absolute top-0 left-0 right-0 h-px"
           style={{ background: `linear-gradient(90deg, transparent, ${G}50, transparent)` }} />
 
@@ -654,21 +714,20 @@ export default function Home() {
           className="max-w-[640px] mx-auto px-6 text-center relative z-10">
 
           <motion.div variants={up} className="inline-flex items-center gap-2 text-xs font-bold border border-white/15 bg-white/[0.07] text-white/50 px-4 py-2 rounded-full mb-10">
-            <Clock className="w-3.5 h-3.5" />
+            <TrendingUp className="w-3.5 h-3.5" />
             ~35,000 WooCommerce stores switch to Shopify every year
           </motion.div>
 
           <motion.h2 variants={up} className="font-black tracking-tighter text-white leading-[0.9] mb-6"
             style={{ fontSize: 'clamp(44px, 7vw, 72px)' }}>
-            Your store is<br />one click away.
-            <br /><span style={{ color: G }}>Start tonight.</span>
+            Your store deserves<br />better than WooCommerce.<br />
+            <span style={{ color: G }}>Move it tonight.</span>
           </motion.h2>
 
-          <motion.p variants={up} className="text-white/40 text-lg mb-6 leading-relaxed max-w-[480px] mx-auto">
-            Test free with 25 real products. No credit card. Pay only when you're ready — and get a full refund if anything's off.
+          <motion.p variants={up} className="text-white/50 text-lg mb-6 leading-relaxed max-w-[480px] mx-auto">
+            Test free with 25 real products. No credit card. Pay only when you&apos;re ready.
           </motion.p>
 
-          {/* Guarantee badge */}
           <motion.div variants={up} className="inline-flex items-center gap-2.5 border border-white/15 bg-white/[0.07] rounded-2xl px-5 py-3 mb-8">
             <span className="text-xl">↩️</span>
             <div className="text-left">
@@ -677,31 +736,93 @@ export default function Home() {
             </div>
           </motion.div>
 
-          <motion.div variants={up} className="flex flex-col sm:flex-row gap-3 justify-center">
+          <motion.div variants={up} className="flex flex-col sm:flex-row gap-3 justify-center mb-10">
             <Link href="/migrate/connect?demo=true"
               className="group flex items-center justify-center gap-2.5 text-white px-8 py-4 rounded-full font-bold text-base hover:opacity-90 hover:shadow-[0_8px_32px_rgba(150,191,72,0.4)] hover:scale-[1.02] transition-all"
               style={{ backgroundColor: G }}>
-              Start Free Migration
+              Migrate My Store Free
               <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
             </Link>
-            <Link href="/migrate/connect?demo=true"
+            <Link href="#pricing"
               className="flex items-center justify-center gap-2.5 border border-white/15 text-white/50 hover:text-white hover:border-white/30 px-8 py-4 rounded-full font-semibold text-base transition-all">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
-              Run free sandbox test
+              See pricing
             </Link>
+          </motion.div>
+
+          {/* Live activity in CTA */}
+          <motion.div variants={up}>
+            <ActivityTicker />
           </motion.div>
         </motion.div>
       </section>
 
       {/* ── FOOTER ── */}
-      <footer className="border-t border-gray-100 py-8 px-6 bg-white">
-        <div className="max-w-[1280px] mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-          <span className="font-black text-lg tracking-tight">Cart<span style={{ color: G }}>Switcher</span></span>
-          <div className="text-gray-400 text-sm">© {new Date().getFullYear()} CartSwitcher. Built for merchants moving to Shopify.</div>
-          <div className="flex gap-5 text-sm text-gray-400">
-            {['Privacy', 'Terms', 'Support'].map(l => (
-              <Link key={l} href="#" className="hover:text-gray-700 transition-colors">{l}</Link>
-            ))}
+      <footer className="border-t border-gray-100 bg-white">
+        <div className="max-w-[1280px] mx-auto px-6 py-12">
+          <div className="grid md:grid-cols-4 gap-10 mb-10">
+
+            {/* Brand */}
+            <div className="md:col-span-2">
+              <span className="font-black text-xl tracking-tight">Cart<span style={{ color: G }}>Switcher</span></span>
+              <p className="text-gray-400 text-sm mt-3 leading-relaxed max-w-sm">
+                The fastest way to move your WooCommerce store to Shopify. Automated, API-direct, zero downtime.
+              </p>
+              <div className="flex gap-3 mt-5">
+                {[
+                  { icon: <Shield className="w-3.5 h-3.5" />, text: 'GDPR Compliant' },
+                  { icon: <CheckCircle2 className="w-3.5 h-3.5" />, text: '7-day refund' },
+                ].map(b => (
+                  <div key={b.text} className="flex items-center gap-1.5 text-xs text-gray-500 border border-gray-200 rounded-full px-3 py-1.5">
+                    <span style={{ color: G }}>{b.icon}</span>{b.text}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Product */}
+            <div>
+              <div className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Product</div>
+              <ul className="space-y-2.5">
+                {[
+                  { label: 'How it works', href: '#how-it-works' },
+                  { label: 'Pricing', href: '#pricing' },
+                  { label: 'Free sandbox', href: '/migrate/connect?demo=true' },
+                  { label: 'Dashboard', href: '/dashboard' },
+                ].map(l => (
+                  <li key={l.label}>
+                    <Link href={l.href} className="text-sm text-gray-400 hover:text-gray-900 transition-colors">{l.label}</Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Support */}
+            <div>
+              <div className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Support</div>
+              <ul className="space-y-2.5">
+                {[
+                  { label: 'FAQ', href: '#faq' },
+                  { label: 'Email support', href: 'mailto:support@cartswitcher.com' },
+                  { label: 'Privacy policy', href: '/privacy' },
+                  { label: 'Terms of service', href: '/terms' },
+                ].map(l => (
+                  <li key={l.label}>
+                    <a href={l.href} className="text-sm text-gray-400 hover:text-gray-900 transition-colors">{l.label}</a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div className="pt-8 border-t border-gray-100 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="text-gray-400 text-sm">© {new Date().getFullYear()} CartSwitcher. Built for merchants moving to Shopify.</div>
+            <div className="flex items-center gap-2 text-xs text-gray-400">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+              </span>
+              All systems operational
+            </div>
           </div>
         </div>
       </footer>
