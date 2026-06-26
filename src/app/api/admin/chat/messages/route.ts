@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
 import { db } from '@/lib/db'
 
-const ADMIN_EMAIL = 'contactscratchboard@gmail.com'
+const ADMIN_EMAIL = 'tanjeem.adeeb@gmail.com'
 
 async function verifyAdmin(userId: string) {
   const { clerkClient } = await import('@clerk/nextjs/server')

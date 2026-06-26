@@ -5,7 +5,7 @@ import { UserButton } from '@clerk/nextjs'
 import { Users, Zap, CreditCard, MessageCircle, LayoutDashboard } from 'lucide-react'
 
 const G = '#96bf48'
-const ADMIN_EMAIL = 'contactscratchboard@gmail.com'
+const ADMIN_EMAIL = 'tanjeem.adeeb@gmail.com'
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const { userId } = await auth()
