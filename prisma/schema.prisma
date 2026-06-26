@@ -8,11 +8,37 @@ datasource db {
 }
 
 model User {
+  id               String   @id @default(cuid())
+  clerkId          String   @unique
+  email            String   @unique
+  name             String?
+  plan             Plan     @default(FREE)
+  stripeCustomerId String?
+  stripePriceId    String?
+  stripeSessionId  String?
+  planActivatedAt  DateTime?
+  createdAt        DateTime @default(now())
+  jobs             MigrationJob[]
+  chatMessages     ChatMessage[]
+}
+
+model ChatMessage {
   id        String   @id @default(cuid())
-  clerkId   String   @unique
-  email     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  fromAdmin Boolean  @default(false)
+  body      String
+  read      Boolean  @default(false)
   createdAt DateTime @default(now())
-  jobs      MigrationJob[]
+
+  @@index([userId])
+}
+
+enum Plan {
+  FREE
+  STARTER
+  GROWTH
+  PRO
 }
 
 model MigrationJob {

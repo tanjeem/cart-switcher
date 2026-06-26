@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import crypto from 'crypto'
+import { auth } from '@clerk/nextjs/server'
 import { db } from '@/lib/db'
 import { inngest } from '@/inngest/client'
 
@@ -48,17 +49,37 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Could not reach Shopify store (${checkRes.status})` }, { status: 400 })
     }
 
-    const guestId = crypto.randomBytes(12).toString('hex')
-    const guest = await db.user.create({
-      data: {
-        clerkId: `guest_${guestId}`,
-        email: `guest_${guestId}@cartswitcher.internal`,
-      },
-    })
+    // Link to signed-in user if available, otherwise create guest
+    const { userId: clerkUserId } = await auth()
+    let dbUserId: string
+
+    if (clerkUserId) {
+      const existing = await db.user.findUnique({ where: { clerkId: clerkUserId } })
+      if (existing) {
+        dbUserId = existing.id
+      } else {
+        // First migration — create the user row
+        const { clerkClient } = await import('@clerk/nextjs/server')
+        const client = await clerkClient()
+        const clerkUser = await client.users.getUser(clerkUserId)
+        const email = clerkUser.emailAddresses[0]?.emailAddress ?? `${clerkUserId}@pending.cartswitcher.com`
+        const created = await db.user.create({ data: { clerkId: clerkUserId, email } })
+        dbUserId = created.id
+      }
+    } else {
+      const guestId = crypto.randomBytes(12).toString('hex')
+      const guest = await db.user.create({
+        data: {
+          clerkId: `guest_${guestId}`,
+          email: `guest_${guestId}@cartswitcher.internal`,
+        },
+      })
+      dbUserId = guest.id
+    }
 
     const job = await db.migrationJob.create({
       data: {
-        userId: guest.id,
+        userId: dbUserId,
         wcUrl,
         wcKey,
         wcSecret,

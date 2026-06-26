@@ -22,7 +22,10 @@ export async function GET(
             select: {
               id: true,
               status: true,
+              wcUrl: true,
+              shopifyDomain: true,
               startedAt: true,
+              completedAt: true,
               totalProducts: true,
               totalOrders: true,
               totalCustomers: true,
@@ -36,14 +39,13 @@ export async function GET(
               failedProducts: true,
               failedOrders: true,
               failedCustomers: true,
-              errorLog: true,
             },
           }),
           db.migrationLog.findMany({
-            where: { jobId, status: 'failed' },
-            orderBy: { createdAt: 'desc' },
-            take: 10,
-            select: { entity: true, entityId: true, message: true, createdAt: true },
+            where: { jobId },
+            orderBy: { createdAt: 'asc' },
+            take: 200,
+            select: { id: true, entity: true, status: true, message: true, createdAt: true },
           }),
         ])
 
@@ -52,7 +54,8 @@ export async function GET(
           return
         }
 
-        send({ ...job, recentErrors: logs })
+        const errorCount = (job.failedProducts ?? 0) + (job.failedOrders ?? 0) + (job.failedCustomers ?? 0)
+        send({ ...job, errorCount, logs })
 
         if (job.status === 'DONE' || job.status === 'FAILED' || job.status === 'PARTIAL' || job.status === 'CANCELLED') {
           controller.close()
