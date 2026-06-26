@@ -3,6 +3,8 @@
 import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { AnimatedDemo } from '@/components/AnimatedDemo'
+import { InteractiveWalkthrough } from '@/components/InteractiveWalkthrough'
+import { MigrationCalculator } from '@/components/MigrationCalculator'
 import { useEffect, useState } from 'react'
 import {
   Package, Users, ShoppingCart, Tag, FileText, Search,
@@ -159,6 +161,7 @@ export default function Home() {
           Cart<span style={{ color: G }}>Switcher</span>
         </span>
         <div className="hidden md:flex items-center gap-7 text-sm font-medium text-gray-400">
+          <a href="#demo" className="hover:text-gray-900 transition-colors">Demo</a>
           <a href="#how-it-works" className="hover:text-gray-900 transition-colors">How it works</a>
           <a href="#pricing" className="hover:text-gray-900 transition-colors">Pricing</a>
           <a href="#faq" className="hover:text-gray-900 transition-colors">FAQ</a>
@@ -258,6 +261,12 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {/* ── INTERACTIVE WALKTHROUGH ── */}
+      <InteractiveWalkthrough />
+
+      {/* ── MIGRATION CALCULATOR ── */}
+      <MigrationCalculator />
 
       {/* ── PAIN SECTION ── */}
       <section className="py-28 border-t border-gray-100 bg-white">
