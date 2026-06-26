@@ -11,6 +11,11 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: 'CartSwitcher — Migrate your store to Shopify',
   description: 'Migrate products, orders, customers, and more from WooCommerce to Shopify in minutes.',
+  icons: {
+    icon: '/icon.svg',
+    shortcut: '/icon.svg',
+    apple: '/icon.svg',
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
