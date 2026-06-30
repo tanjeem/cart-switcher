@@ -96,12 +96,15 @@ export const migrationStart = inngest.createFunction(
     }
 
     if (deleteAll && entities.orders) {
-      const allOrderIds = await step.run('delete-all-orders-scan', async () => shopify.getAllOrderIds())
+      const allOrderIds = await step.run('delete-all-orders-scan', async () => {
+        const ids = await shopify.getAllOrderIds()
+        await db.migrationLog.create({ data: { jobId, entity: 'order', entityId: 'delete', status: 'info', message: `Deleting ${ids.length} existing orders from Shopify…` } })
+        return ids
+      })
       const DELETE_BATCH = 50
       const allOrderBatches = chunk(allOrderIds as number[], DELETE_BATCH)
       for (let i = 0; i < allOrderBatches.length; i++) {
         await step.run(`delete-all-orders-${i}`, async () => {
-          // Delete 5 at a time to stay within Shopify rate limits
           const subBatches = chunk(allOrderBatches[i], 5)
           for (const sub of subBatches) {
             await Promise.all(sub.map(id =>
@@ -110,6 +113,9 @@ export const migrationStart = inngest.createFunction(
           }
         })
       }
+      await step.run('delete-all-orders-done', async () => {
+        await db.migrationLog.create({ data: { jobId, entity: 'order', entityId: 'delete', status: 'info', message: `All orders deleted. Starting re-migration…` } })
+      })
     }
 
     if (cleanFirst) {
