@@ -333,11 +333,17 @@ export default function MigrationLivePage() {
             </div>
           )}
           {isDone && (
-            <Link href={`/dashboard/migration/${jobId}/report`}
-              className="flex items-center gap-1.5 text-white font-bold text-sm px-4 py-2 rounded-full cursor-pointer hover:opacity-90 transition-opacity"
-              style={{ backgroundColor: G }}>
-              View report <ArrowRight className="w-3.5 h-3.5" />
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link href={`/migrate/dedup/${jobId}`}
+                className="flex items-center gap-1.5 font-bold text-sm px-4 py-2 rounded-full cursor-pointer hover:opacity-90 transition-opacity border border-gray-200 text-gray-600 bg-white">
+                Remove duplicates
+              </Link>
+              <Link href={`/dashboard/migration/${jobId}/report`}
+                className="flex items-center gap-1.5 text-white font-bold text-sm px-4 py-2 rounded-full cursor-pointer hover:opacity-90 transition-opacity"
+                style={{ backgroundColor: G }}>
+                View report <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </div>
           )}
         </div>
       </div>
