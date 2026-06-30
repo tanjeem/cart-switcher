@@ -232,7 +232,8 @@ export default function MigrationLivePage() {
   const { jobId } = useParams<{ jobId: string }>()
   const [job,      setJob]     = useState<JobSnapshot | null>(null)
   const [tick,     setTick]    = useState('0:00')
-  const [retrying, setRetrying] = useState(false)
+  const [retrying,  setRetrying]  = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [tab,      setTab]     = useState<'progress'|'log'>('progress')
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -251,6 +252,18 @@ export default function MigrationLivePage() {
 
   const lines = useMemo(() => job ? buildLines(job.logs, job.startedAt) : [], [job])
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [lines.length])
+
+  const cancel = async () => {
+    if (!jobId || cancelling) return
+    setCancelling(true)
+    try {
+      await fetch('/api/jobs/cancel', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId }),
+      })
+      window.location.reload()
+    } finally { setCancelling(false) }
+  }
 
   const retry = async (entities?: string[]) => {
     if (!jobId || retrying) return
@@ -308,9 +321,15 @@ export default function MigrationLivePage() {
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           {isRunning && (
-            <div className="flex items-center gap-1.5 text-sm text-gray-600 bg-white border border-gray-100 rounded-full px-3 py-1.5 shadow-sm">
-              <Clock className="w-3.5 h-3.5" style={{ color: G }} />
-              <span className="font-mono font-bold tabular-nums text-sm">{tick}</span>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 text-sm text-gray-600 bg-white border border-gray-100 rounded-full px-3 py-1.5 shadow-sm">
+                <Clock className="w-3.5 h-3.5" style={{ color: G }} />
+                <span className="font-mono font-bold tabular-nums text-sm">{tick}</span>
+              </div>
+              <button onClick={cancel} disabled={cancelling}
+                className="flex items-center gap-1.5 text-sm font-bold px-4 py-2 rounded-full bg-red-500 text-white cursor-pointer hover:bg-red-600 transition-colors disabled:opacity-60">
+                <XCircle className="w-3.5 h-3.5" />{cancelling ? 'Stopping…' : 'Stop'}
+              </button>
             </div>
           )}
           {isDone && (
