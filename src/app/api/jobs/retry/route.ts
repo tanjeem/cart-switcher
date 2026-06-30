@@ -4,7 +4,7 @@ import { inngest } from '@/inngest/client'
 
 export async function POST(req: Request) {
   try {
-    const { jobId, entities } = await req.json()
+    const { jobId, entities, deleteAll } = await req.json()
     if (!jobId) return NextResponse.json({ error: 'jobId required' }, { status: 400 })
 
     const old = await db.migrationJob.findUnique({ where: { id: jobId } })
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
       : ['products', 'orders', 'customers', 'coupons', 'posts'].filter(e => entitiesObj[e as keyof typeof entitiesObj])
     await db.migrationLog.deleteMany({ where: { jobId, ...(entityLogKeys ? { entity: { in: entityLogKeys } } : {}) } })
 
-    await inngest.send({ name: 'migration/start', data: { jobId: updatedJob.id, ...(entitiesObj ? { entities: entitiesObj } : {}) } })
+    await inngest.send({ name: 'migration/start', data: { jobId: updatedJob.id, ...(entitiesObj ? { entities: entitiesObj } : {}), ...(deleteAll ? { deleteAll: true } : {}) } })
 
     return NextResponse.json({ jobId: updatedJob.id })
   } catch (err) {

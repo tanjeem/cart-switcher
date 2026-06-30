@@ -119,7 +119,7 @@ const LINE_COLOR: Record<string, string> = {
 }
 
 /* ── Entity row ─────────────────────────────────────────────── */
-function EntityRow({ row, job, onRetry, onRun }: { row: typeof ROWS[number]; job: JobSnapshot; onRetry: (k: string) => void; onRun: (k: string) => void }) {
+function EntityRow({ row, job, onRetry, onRun, onDeleteAll }: { row: typeof ROWS[number]; job: JobSnapshot; onRetry: (k: string) => void; onRun: (k: string) => void; onDeleteAll: (k: string) => void }) {
   const [open, setOpen] = useState(false)
   const Icon   = row.icon
   const total  = job[row.total] as number
@@ -181,6 +181,12 @@ function EntityRow({ row, job, onRetry, onRun }: { row: typeof ROWS[number]; job
             </div>
             {!isSkip && (
               <div className="flex items-center gap-2 text-xs">
+                {isDone && row.key === 'orders' && (
+                  <button onClick={e => { e.stopPropagation(); onDeleteAll(row.key) }}
+                    className="flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-md bg-red-50 text-red-500 border border-red-200 cursor-pointer hover:bg-red-100 transition-colors">
+                    <XCircle className="w-2.5 h-2.5" /> Delete all &amp; re-migrate
+                  </button>
+                )}
                 <span className="tabular-nums font-mono text-gray-400">{done.toLocaleString()}/{total.toLocaleString()}</span>
                 <span className="font-black tabular-nums w-9 text-right" style={{ color: barColor }}>{pct}%</span>
               </div>
@@ -263,6 +269,19 @@ export default function MigrationLivePage() {
       })
       window.location.reload()
     } finally { setCancelling(false) }
+  }
+
+  const retryWithDeleteAll = async (entities: string[]) => {
+    if (!jobId || retrying) return
+    if (!confirm('This will DELETE all orders from Shopify and re-migrate them. Are you sure?')) return
+    setRetrying(true)
+    try {
+      await fetch('/api/jobs/retry', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId, entities, deleteAll: true }),
+      })
+      window.location.reload()
+    } finally { setRetrying(false) }
   }
 
   const retry = async (entities?: string[]) => {
@@ -409,7 +428,7 @@ export default function MigrationLivePage() {
               </button>
             )}
           </div>
-          {ROWS.map(r => <EntityRow key={r.key} row={r} job={job} onRetry={e => retry([e])} onRun={e => retry([e])} />)}
+          {ROWS.map(r => <EntityRow key={r.key} row={r} job={job} onRetry={e => retry([e])} onRun={e => retry([e])} onDeleteAll={e => retryWithDeleteAll([e])} />)}
 
           {isFailed && (
             <div className="rounded-xl border border-red-200 bg-red-50 p-4 flex items-center justify-between gap-3 mt-2">

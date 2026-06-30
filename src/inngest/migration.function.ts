@@ -57,7 +57,7 @@ export const migrationStart = inngest.createFunction(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async ({ event, step }: { event: any; step: any }) => {
     console.log('[MIGRATION_START] EVENT RECEIVED:', event.data.jobId)
-    const { jobId, cleanFirst, entities: rawEntities, autoRetryCount = 0 } = event.data
+    const { jobId, cleanFirst, deleteAll, entities: rawEntities, autoRetryCount = 0 } = event.data
 
     const entities: MigrationEntities = {
       products: rawEntities?.products ?? true,
@@ -91,6 +91,18 @@ export const migrationStart = inngest.createFunction(
     if (USE_GQL_ORDERS && entities.orders) {
       const gqlOk = await step.run('detect-order-api', () => shopify.canUseGraphQLOrders())
       if (gqlOk) shopify.enableGqlOrders()
+    }
+
+    if (deleteAll && entities.orders) {
+      const allOrderIds = await step.run('delete-all-orders-scan', async () => shopify.getAllOrderIds())
+      const allOrderBatches = chunk(allOrderIds as number[], CLEANUP_BATCH)
+      for (let i = 0; i < allOrderBatches.length; i++) {
+        await step.run(`delete-all-orders-${i}`, async () => {
+          for (const id of allOrderBatches[i]) {
+            try { await shopify.deleteOrder(id) } catch { /* ignore */ }
+          }
+        })
+      }
     }
 
     if (cleanFirst) {
