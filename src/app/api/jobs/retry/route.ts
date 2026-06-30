@@ -32,7 +32,11 @@ export async function POST(req: Request) {
     // Delete old logs so they don't pile up across retries
     await db.migrationLog.deleteMany({ where: { jobId } })
 
-    await inngest.send({ name: 'migration/start', data: { jobId: updatedJob.id, ...(entities ? { entities } : {}) } })
+    const entitiesObj = Array.isArray(entities)
+      ? { products: entities.includes('products'), customers: entities.includes('customers'), orders: entities.includes('orders'), coupons: entities.includes('coupons'), posts: entities.includes('posts') }
+      : entities ?? null
+
+    await inngest.send({ name: 'migration/start', data: { jobId: updatedJob.id, ...(entitiesObj ? { entities: entitiesObj } : {}) } })
 
     return NextResponse.json({ jobId: updatedJob.id })
   } catch (err) {
