@@ -179,14 +179,14 @@ function EntityRow({ row, job, jobStopped, onRetry, onRun, onDeleteAll }: { row:
                 </>
               )}
             </div>
+            {jobStopped && row.key === 'orders' && (
+              <button onClick={e => { e.stopPropagation(); onDeleteAll(row.key) }}
+                className="flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-md bg-red-50 text-red-500 border border-red-200 cursor-pointer hover:bg-red-100 transition-colors">
+                <XCircle className="w-2.5 h-2.5" /> Delete all &amp; re-migrate
+              </button>
+            )}
             {!isSkip && (
               <div className="flex items-center gap-2 text-xs">
-                {(isDone || jobStopped) && row.key === 'orders' && (
-                  <button onClick={e => { e.stopPropagation(); onDeleteAll(row.key) }}
-                    className="flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-md bg-red-50 text-red-500 border border-red-200 cursor-pointer hover:bg-red-100 transition-colors">
-                    <XCircle className="w-2.5 h-2.5" /> Delete all &amp; re-migrate
-                  </button>
-                )}
                 <span className="tabular-nums font-mono text-gray-400">{done.toLocaleString()}/{total.toLocaleString()}</span>
                 <span className="font-black tabular-nums w-9 text-right" style={{ color: barColor }}>{pct}%</span>
               </div>
