@@ -119,7 +119,7 @@ const LINE_COLOR: Record<string, string> = {
 }
 
 /* ── Entity row ─────────────────────────────────────────────── */
-function EntityRow({ row, job, onRetry }: { row: typeof ROWS[number]; job: JobSnapshot; onRetry: (k: string) => void }) {
+function EntityRow({ row, job, onRetry, onRun }: { row: typeof ROWS[number]; job: JobSnapshot; onRetry: (k: string) => void; onRun: (k: string) => void }) {
   const [open, setOpen] = useState(false)
   const Icon   = row.icon
   const total  = job[row.total] as number
@@ -168,7 +168,16 @@ function EntityRow({ row, job, onRetry }: { row: typeof ROWS[number]; job: JobSn
               {pill === 'error' && <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-700">{failed} errors</span>}
               {pill === 'run'   && <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md text-white" style={{ backgroundColor: row.accent }}>Running</span>}
               {pill === 'queue' && <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-400">Queued</span>}
-              {isSkip           && <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-300">Skipped</span>}
+              {isSkip && (
+                <>
+                  <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-300">Skipped</span>
+                  <button onClick={e => { e.stopPropagation(); onRun(row.key) }}
+                    className="flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-md text-white cursor-pointer hover:opacity-90 transition-opacity"
+                    style={{ backgroundColor: row.accent }}>
+                    <RefreshCw className="w-2.5 h-2.5" /> Run {row.label}
+                  </button>
+                </>
+              )}
             </div>
             {!isSkip && (
               <div className="flex items-center gap-2 text-xs">
@@ -375,7 +384,7 @@ export default function MigrationLivePage() {
               </button>
             )}
           </div>
-          {ROWS.map(r => <EntityRow key={r.key} row={r} job={job} onRetry={e => retry([e])} />)}
+          {ROWS.map(r => <EntityRow key={r.key} row={r} job={job} onRetry={e => retry([e])} onRun={e => retry([e])} />)}
 
           {isFailed && (
             <div className="rounded-xl border border-red-200 bg-red-50 p-4 flex items-center justify-between gap-3 mt-2">
