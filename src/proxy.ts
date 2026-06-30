@@ -1,12 +1,27 @@
-import { NextResponse } from 'next/server'
-import type { NextRequest } from 'next/server'
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 
-// Auth is handled server-side via Clerk's auth() in each layout/page.
-// proxy.ts (Next.js 16) runs on Node.js runtime which is incompatible
-// with clerkMiddleware (Edge Runtime), so we pass through all requests here.
-export default function proxy(_req: NextRequest) {
-  return NextResponse.next()
-}
+const isPublicRoute = createRouteMatcher([
+  '/',
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+  '/checkout(.*)',
+  '/migrate/connect(.*)',
+  '/migrate/progress(.*)',
+  '/migrate/dedup(.*)',
+  '/migrate/manage(.*)',
+  '/api/connections(.*)',
+  '/api/jobs(.*)',
+  '/api/progress(.*)',
+  '/api/shopify(.*)',
+  '/api/inngest(.*)',
+  '/api/stripe/webhook',
+])
+
+export default clerkMiddleware(async (auth, req) => {
+  if (!isPublicRoute(req)) {
+    await auth.protect()
+  }
+})
 
 export const config = {
   matcher: ['/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)', '/(api|trpc)(.*)'],
