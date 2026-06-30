@@ -1,5 +1,6 @@
 import { db } from '@/lib/db'
 import { Suspense } from 'react'
+import Link from 'next/link'
 
 const G = '#96bf48'
 
@@ -35,7 +36,7 @@ async function MigrationsList({ userId }: { userId?: string }) {
           : null
 
         return (
-          <div key={job.id} className="bg-[#1a1a1a] rounded-xl border border-white/10 px-5 py-4">
+          <Link key={job.id} href={`/dashboard/migration/${job.id}`} className="block bg-[#1a1a1a] rounded-xl border border-white/10 px-5 py-4 hover:border-white/20 transition-colors cursor-pointer">
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -64,7 +65,7 @@ async function MigrationsList({ userId }: { userId?: string }) {
                 {new Date(job.createdAt).toLocaleDateString()}
               </div>
             </div>
-          </div>
+          </Link>
         )
       })}
     </div>
