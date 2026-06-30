@@ -369,7 +369,7 @@ export class WooCommerceFetcher {
       phone: o.billing?.phone,
       note: o.customer_note,
       financialStatus,
-      fulfillmentStatus: o.status === 'completed' ? 'fulfilled' : null,
+      fulfillmentStatus: (o.status === 'completed' || o.status === 'cancelled' || o.status === 'failed' || o.status === 'refunded') ? 'fulfilled' : null,
       currency: o.currency,
       totalPrice: o.total,
       subtotalPrice: o.subtotal,
