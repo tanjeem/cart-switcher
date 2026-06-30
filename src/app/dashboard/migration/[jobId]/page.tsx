@@ -119,7 +119,7 @@ const LINE_COLOR: Record<string, string> = {
 }
 
 /* ── Entity row ─────────────────────────────────────────────── */
-function EntityRow({ row, job, onRetry, onRun, onDeleteAll }: { row: typeof ROWS[number]; job: JobSnapshot; onRetry: (k: string) => void; onRun: (k: string) => void; onDeleteAll: (k: string) => void }) {
+function EntityRow({ row, job, jobStopped, onRetry, onRun, onDeleteAll }: { row: typeof ROWS[number]; job: JobSnapshot; jobStopped: boolean; onRetry: (k: string) => void; onRun: (k: string) => void; onDeleteAll: (k: string) => void }) {
   const [open, setOpen] = useState(false)
   const Icon   = row.icon
   const total  = job[row.total] as number
@@ -181,7 +181,7 @@ function EntityRow({ row, job, onRetry, onRun, onDeleteAll }: { row: typeof ROWS
             </div>
             {!isSkip && (
               <div className="flex items-center gap-2 text-xs">
-                {isDone && row.key === 'orders' && (
+                {(isDone || jobStopped) && row.key === 'orders' && (
                   <button onClick={e => { e.stopPropagation(); onDeleteAll(row.key) }}
                     className="flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-md bg-red-50 text-red-500 border border-red-200 cursor-pointer hover:bg-red-100 transition-colors">
                     <XCircle className="w-2.5 h-2.5" /> Delete all &amp; re-migrate
@@ -305,11 +305,12 @@ export default function MigrationLivePage() {
     </div>
   )
 
-  const isDone    = ['DONE','PARTIAL','FAILED'].includes(job.status)
-  const isPartial = job.status === 'PARTIAL'
-  const isFailed  = job.status === 'FAILED'
-  const isSuccess = job.status === 'DONE'
-  const isRunning = job.status === 'RUNNING'
+  const isDone    = ['DONE','PARTIAL','FAILED','CANCELLED'].includes(job.status)
+  const isPartial   = job.status === 'PARTIAL'
+  const isFailed    = job.status === 'FAILED'
+  const isSuccess   = job.status === 'DONE'
+  const isRunning   = job.status === 'RUNNING'
+  const isCancelled = job.status === 'CANCELLED'
 
   const totalAll   = ROWS.reduce((s, r) => s + (job[r.total] as number), 0)
   const doneAll    = ROWS.reduce((s, r) => s + (job[r.done]  as number), 0)
@@ -330,10 +331,10 @@ export default function MigrationLivePage() {
             </span>
           )}
           {isSuccess  && <CheckCircle2 className="w-5 h-5 flex-shrink-0" style={{ color: G }} />}
-          {(isPartial || isFailed) && <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />}
+          {(isPartial || isFailed || isCancelled) && <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />}
           <div className="min-w-0">
             <h1 className="text-lg font-black text-gray-900 leading-tight">
-              {isRunning ? 'Migration in progress' : isSuccess ? 'Migration complete' : isPartial ? 'Completed with errors' : 'Migration failed'}
+              {isRunning ? 'Migration in progress' : isSuccess ? 'Migration complete' : isPartial ? 'Completed with errors' : isCancelled ? 'Migration stopped' : 'Migration failed'}
             </h1>
             <p className="text-xs text-gray-400 font-mono truncate">{job.wcUrl} → {job.shopifyDomain}</p>
           </div>
@@ -428,7 +429,7 @@ export default function MigrationLivePage() {
               </button>
             )}
           </div>
-          {ROWS.map(r => <EntityRow key={r.key} row={r} job={job} onRetry={e => retry([e])} onRun={e => retry([e])} onDeleteAll={e => retryWithDeleteAll([e])} />)}
+          {ROWS.map(r => <EntityRow key={r.key} row={r} job={job} jobStopped={isDone} onRetry={e => retry([e])} onRun={e => retry([e])} onDeleteAll={e => retryWithDeleteAll([e])} />)}
 
           {isFailed && (
             <div className="rounded-xl border border-red-200 bg-red-50 p-4 flex items-center justify-between gap-3 mt-2">
