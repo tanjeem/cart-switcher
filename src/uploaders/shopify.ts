@@ -232,15 +232,18 @@ export class ShopifyUploader {
   }
 
   async getAllOrderIds(): Promise<number[]> {
-    const ids: number[] = []
-    let path = `/orders.json?limit=250&status=any&fields=id`
-    while (path) {
-      const res = await this.client.get(path)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      for (const o of (res.data.orders ?? []) as any[]) ids.push(o.id)
-      path = this.parseNextPath(res.headers['link'] ?? '')
+    const idSet = new Set<number>()
+    // Shopify's status=any misses archived orders — fetch each status explicitly
+    for (const status of ['open', 'closed', 'cancelled', 'any']) {
+      let path = `/orders.json?limit=250&status=${status}&fields=id`
+      while (path) {
+        const res = await this.client.get(path)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const o of (res.data.orders ?? []) as any[]) idSet.add(o.id)
+        path = this.parseNextPath(res.headers['link'] ?? '')
+      }
     }
-    return ids
+    return Array.from(idSet)
   }
 
   // ── Existing-order snapshot for skip-on-retry ─────────────────────────────
