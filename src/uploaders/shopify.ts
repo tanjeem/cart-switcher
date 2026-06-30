@@ -197,7 +197,7 @@ export class ShopifyUploader {
 
   async deleteOrder(id: number): Promise<void> {
     await this.client.delete(`/orders/${id}.json`)
-    await sleep(500)
+    await sleep(150)
   }
 
   async deleteCustomer(id: number): Promise<void> {
