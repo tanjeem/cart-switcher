@@ -57,7 +57,7 @@ export const migrationStart = inngest.createFunction(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async ({ event, step }: { event: any; step: any }) => {
     console.log('[MIGRATION_START] EVENT RECEIVED:', event.data.jobId)
-    const { jobId, cleanFirst, deleteAll, entities: rawEntities, autoRetryCount = 0 } = event.data
+    const { jobId, runId, cleanFirst, deleteAll, entities: rawEntities, autoRetryCount = 0 } = event.data
 
     const entities: MigrationEntities = {
       products: rawEntities?.products ?? true,
@@ -69,7 +69,9 @@ export const migrationStart = inngest.createFunction(
 
     const job = await db.migrationJob.findUnique({ where: { id: jobId } })
     if (!job) throw new Error(`Job ${jobId} not found`)
-
+    // If job is still marked CANCELLED from a previous stop, the retry route
+    // will have set it to PENDING — but if another run is still winding down,
+    // wait briefly before proceeding
     const shopify = new ShopifyUploader({ domain: job.shopifyDomain, accessToken: job.shopifyAccessToken })
     const wc = new WooCommerceFetcher({ url: job.wcUrl, consumerKey: job.wcKey, consumerSecret: job.wcSecret })
 
@@ -172,7 +174,7 @@ export const migrationStart = inngest.createFunction(
     } else {
       await step.sendEvent('trigger-first-chunk', {
         name: 'migration/chunk',
-        data: { jobId, entities, existingOrders: existingOrderIdsArr, type: firstType, page: 1, autoRetryCount, isDemo },
+        data: { jobId, runId, entities, existingOrders: existingOrderIdsArr, type: firstType, page: 1, autoRetryCount, isDemo },
       })
     }
   }
@@ -201,11 +203,13 @@ export const migrationChunk = inngest.createFunction(
   },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async ({ event, step }: { event: any; step: any }) => {
-    const { jobId, entities, existingOrders, type, page, autoRetryCount, isDemo } = event.data
+    const { jobId, runId, entities, existingOrders, type, page, autoRetryCount, isDemo } = event.data
 
-    const job = await db.migrationJob.findUnique({ where: { id: jobId }, select: { status: true, wcUrl: true, wcKey: true, wcSecret: true, shopifyDomain: true, shopifyAccessToken: true } })
-    if (job?.status === 'CANCELLED') return
+    const job = await db.migrationJob.findUnique({ where: { id: jobId }, select: { status: true, inngestId: true, wcUrl: true, wcKey: true, wcSecret: true, shopifyDomain: true, shopifyAccessToken: true } })
     if (!job) return
+    if (job.status === 'CANCELLED') return
+    // Stale chunk from a previous run — a newer retry has taken over
+    if (runId && job.inngestId && job.inngestId !== runId) return
 
     const wc = new WooCommerceFetcher({ url: job.wcUrl, consumerKey: job.wcKey, consumerSecret: job.wcSecret })
     const shopify = new ShopifyUploader({ domain: job.shopifyDomain, accessToken: job.shopifyAccessToken })
@@ -322,13 +326,13 @@ export const migrationChunk = inngest.createFunction(
       } else {
         await step.sendEvent('trigger-next-type', {
           name: 'migration/chunk',
-          data: { jobId, entities, existingOrders, type: nextType, page: 1, autoRetryCount, isDemo },
+          data: { jobId, runId, entities, existingOrders, type: nextType, page: 1, autoRetryCount, isDemo },
         })
       }
     } else {
       await step.sendEvent('trigger-next-page', {
         name: 'migration/chunk',
-        data: { jobId, entities, existingOrders, type, page: page + 1, autoRetryCount, isDemo },
+        data: { jobId, runId, entities, existingOrders, type, page: page + 1, autoRetryCount, isDemo },
       })
     }
   }

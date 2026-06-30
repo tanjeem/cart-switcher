@@ -23,6 +23,9 @@ export async function POST(req: Request) {
     if (runAll || entitiesObj.coupons)   { resetData.doneCoupons = 0;   resetData.totalCoupons = 0 }
     if (runAll || entitiesObj.posts)     { resetData.donePosts = 0;     resetData.totalPosts = 0 }
 
+    const runId = `${Date.now()}`
+    resetData.inngestId = runId
+
     const updatedJob = await db.migrationJob.update({ where: { id: jobId }, data: resetData })
 
     // Delete logs only for the entities being run
@@ -31,7 +34,7 @@ export async function POST(req: Request) {
       : ['products', 'orders', 'customers', 'coupons', 'posts'].filter(e => entitiesObj[e as keyof typeof entitiesObj])
     await db.migrationLog.deleteMany({ where: { jobId, ...(entityLogKeys ? { entity: { in: entityLogKeys } } : {}) } })
 
-    await inngest.send({ name: 'migration/start', data: { jobId: updatedJob.id, ...(entitiesObj ? { entities: entitiesObj } : {}), ...(deleteAll ? { deleteAll: true } : {}) } })
+    await inngest.send({ name: 'migration/start', data: { jobId: updatedJob.id, runId, ...(entitiesObj ? { entities: entitiesObj } : {}), ...(deleteAll ? { deleteAll: true } : {}) } })
 
     return NextResponse.json({ jobId: updatedJob.id })
   } catch (err) {
