@@ -59,14 +59,16 @@ function buildOptions(p: NormalizedProduct) {
 }
 
 export function transformCustomer(c: NormalizedCustomer) {
+  const billingCountry = c.addresses.find(a => a.isDefault)?.country ?? c.addresses[0]?.country
   return {
     first_name: c.firstName,
     last_name: c.lastName,
     email: c.email,
     // Sanitize phone — Shopify rejects invalid numbers with a 422
-    phone: sanitizePhone(c.phone),
+    phone: sanitizePhone(c.phone, billingCountry),
     accepts_marketing: c.acceptsMarketing,
     note: c.note ?? null,
+    tags: `wc_customer_id:${c.sourceId}`,
     addresses: c.addresses.map(a => ({
       first_name: a.firstName,
       last_name: a.lastName,
@@ -77,13 +79,40 @@ export function transformCustomer(c: NormalizedCustomer) {
       zip: a.zip,
       country: a.country,
       // Sanitize address phone too
-      phone: sanitizePhone(a.phone),
+      phone: sanitizePhone(a.phone, a.country),
       default: a.isDefault ?? false,
     })),
   }
 }
 
-function sanitizePhone(phone?: string): string | null {
+// ISO 3166-1 alpha-2 → dial code, for countries whose local numbers start with 0
+const COUNTRY_DIAL: Record<string, string> = {
+  BD: '880', // Bangladesh
+  PK: '92',
+  IN: '91',
+  GB: '44',
+  AU: '61',
+  DE: '49',
+  FR: '33',
+  IT: '39',
+  NL: '31',
+  PH: '63',
+  EG: '20',
+  TR: '90',
+  IR: '98',
+  TH: '66',
+  VN: '84',
+  KR: '82',
+  NG: '234',
+  GH: '233',
+  KE: '254',
+  ZA: '27',
+  MX: '52',
+  AR: '54',
+  ID: '62',
+}
+
+function sanitizePhone(phone?: string, country?: string): string | null {
   if (!phone) return null
   const trimmed = phone.trim()
   // Already has explicit + country code prefix → strip non-digits and keep
@@ -93,15 +122,20 @@ function sanitizePhone(phone?: string): string | null {
   }
   const digits = trimmed.replace(/\D/g, '')
   if (digits.length < 7) return null
-  // Leading 0 means local format — country code unknown, drop it to avoid invalid E.164
-  if (digits.startsWith('0')) return null
+  // Leading 0 means local format — resolve via country if known, otherwise drop
+  if (digits.startsWith('0')) {
+    const dialCode = country ? COUNTRY_DIAL[country.toUpperCase()] : undefined
+    if (!dialCode) return null
+    const local = digits.slice(1) // strip leading 0
+    return `+${dialCode}${local}`
+  }
   return `+${digits}`
 }
 
 export function transformOrder(o: NormalizedOrder) {
   return {
     email: o.email,
-    phone: sanitizePhone(o.phone),
+    phone: sanitizePhone(o.phone, o.billingAddress?.country ?? o.shippingAddress?.country),
     // Include name from billing so the order shows a name, not just the email
     customer: {
       email: o.email,
@@ -135,7 +169,7 @@ export function transformOrder(o: NormalizedOrder) {
       province: o.shippingAddress.province ?? '',
       zip: o.shippingAddress.zip ?? '',
       country: o.shippingAddress.country,
-      phone: sanitizePhone(o.shippingAddress.phone),
+      phone: sanitizePhone(o.shippingAddress.phone, o.shippingAddress.country),
     } : null,
     billing_address: (o.billingAddress?.address1 && o.billingAddress?.country) ? {
       first_name: o.billingAddress.firstName,
@@ -146,7 +180,7 @@ export function transformOrder(o: NormalizedOrder) {
       province: o.billingAddress.province ?? '',
       zip: o.billingAddress.zip ?? '',
       country: o.billingAddress.country,
-      phone: sanitizePhone(o.billingAddress.phone),
+      phone: sanitizePhone(o.billingAddress.phone, o.billingAddress.country),
     } : null,
     // Used for deduplication on retry — lets us find already-migrated orders
     note_attributes: [{ name: 'wc_order_id', value: o.sourceId }],

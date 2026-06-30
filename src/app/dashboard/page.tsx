@@ -45,11 +45,16 @@ function MiniStat({ icon, label, value }: { icon: React.ReactNode; label: string
   )
 }
 
+const ADMIN_EMAIL = 'tanjeem.adeeb@gmail.com'
+
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<Record<string, string>> }) {
   const { userId } = await auth()
   if (!userId) redirect('/sign-in')
 
   const clerkUser = await currentUser()
+  const email = clerkUser?.emailAddresses[0]?.emailAddress ?? ''
+  if (email === ADMIN_EMAIL) redirect('/admin')
+
   const sp = await searchParams
   const isWelcome = sp.welcome === '1'
 

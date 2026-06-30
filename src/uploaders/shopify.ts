@@ -331,6 +331,11 @@ export class ShopifyUploader {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private async createCustomerGql(payload: any): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const parseTags = (tags: any): string[] => {
+      if (!tags) return []
+      if (Array.isArray(tags)) return tags
+      return tags.split(',').map((t: string) => t.trim()).filter(Boolean)
+    }
     const buildInput = (data: any, withPhone = true) => ({
       firstName: data.first_name ?? '',
       lastName: data.last_name ?? '',
@@ -338,6 +343,7 @@ export class ShopifyUploader {
       phone: withPhone ? (data.phone || null) : null,
       emailMarketingConsent: { marketingState: (data.accepts_marketing ?? false) ? 'SUBSCRIBED' : 'UNSUBSCRIBED' },
       note: data.note || null,
+      tags: parseTags(data.tags),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       addresses: data.addresses?.map((a: any) => ({
         firstName: a.first_name ?? '',
