@@ -399,3 +399,40 @@ export const migrationComplete = inngest.createFunction(
     })
   }
 )
+
+export const migrationDeleteOrders = inngest.createFunction(
+  { id: 'migration-delete-orders', retries: 1, triggers: [{ event: 'migration/delete-orders' }] },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async ({ event, step }: { event: any; step: any }) => {
+    const { jobId, runId } = event.data
+
+    const job = await db.migrationJob.findUnique({ where: { id: jobId } })
+    if (!job) return
+
+    const shopify = new ShopifyUploader({ domain: job.shopifyDomain, accessToken: job.shopifyAccessToken })
+
+    const allOrderIds = await step.run('delete-orders-scan', async () => {
+      const ids = await shopify.getAllOrderIds()
+      await db.migrationLog.create({ data: { jobId, entity: 'order', entityId: 'delete', status: 'info', message: `Found ${ids.length} orders on Shopify. Deleting…` } })
+      return ids
+    })
+
+    const DELETE_BATCH = 50
+    const batches = chunk(allOrderIds as number[], DELETE_BATCH)
+    for (let i = 0; i < batches.length; i++) {
+      await step.run(`delete-orders-batch-${i}`, async () => {
+        const current = await db.migrationJob.findUnique({ where: { id: jobId }, select: { inngestId: true, status: true } })
+        if (current?.status === 'CANCELLED' || (runId && current?.inngestId !== runId)) return
+        const subBatches = chunk(batches[i], 5)
+        for (const sub of subBatches) {
+          await Promise.all(sub.map(id => shopify.deleteOrder(id).catch(() => {})))
+        }
+      })
+    }
+
+    await step.run('delete-orders-complete', async () => {
+      await db.migrationLog.create({ data: { jobId, entity: 'order', entityId: 'delete', status: 'info', message: `All orders deleted from Shopify.` } })
+      await db.migrationJob.update({ where: { id: jobId }, data: { status: 'CANCELLED', completedAt: new Date() } })
+    })
+  }
+)
